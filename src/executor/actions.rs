@@ -96,8 +96,7 @@ pub async fn run_actions(
             }
             Action::Type {
                 value,
-                xpath,
-                css,
+                target,
                 secret,
                 timeout: action_timeout,
                 on_error,
@@ -105,13 +104,13 @@ pub async fn run_actions(
                 shadow_root,
                 iframe,
             } => {
-                let result = do_type(&page, context, value, xpath, css, *secret, *action_timeout, shadow_root, iframe, verbose).await;
+                let result = do_type(&page, context, value, target, *secret, *action_timeout, shadow_root, iframe, verbose).await;
                 if let Err(e) = result {
                     handle_action_error(ws_url, e, on_error, on_timeout, context, verbose, flows).await?;
                 }
             }
-            Action::Click { xpath, css, timeout: action_timeout, on_error, on_timeout, shadow_root, iframe, .. } => {
-                let result = do_click(&page, xpath, css, *action_timeout, shadow_root, iframe, verbose).await;
+            Action::Click { target, timeout: action_timeout, on_error, on_timeout, shadow_root, iframe, .. } => {
+                let result = do_click(&page, target, *action_timeout, shadow_root, iframe, verbose).await;
                 if let Err(e) = result {
                     handle_action_error(ws_url, e, on_error, on_timeout, context, verbose, flows).await?;
                 }
@@ -128,8 +127,7 @@ pub async fn run_actions(
             }
             Action::Wait {
                 url,
-                xpath,
-                css,
+                target,
                 duration,
                 timeout: action_timeout,
                 on_error,
@@ -137,7 +135,7 @@ pub async fn run_actions(
                 shadow_root,
                 iframe,
             } => {
-                let result = do_wait(&page, context, url, xpath, css, duration, *action_timeout, shadow_root, iframe, verbose).await;
+                let result = do_wait(&page, context, url, target, duration, *action_timeout, shadow_root, iframe, verbose).await;
                 if let Err(e) = result {
                     handle_action_error(ws_url, e, on_error, on_timeout, context, verbose, flows).await?;
                 }
@@ -149,8 +147,8 @@ pub async fn run_actions(
                 let value = ask_user(prompt)?;
                 context.set(to, &value);
             }
-            Action::Hover { xpath, css, timeout: action_timeout, on_error, on_timeout, shadow_root, iframe, .. } => {
-                let result = do_hover(&page, xpath, css, *action_timeout, shadow_root, iframe, verbose).await;
+            Action::Hover { target, timeout: action_timeout, on_error, on_timeout, shadow_root, iframe, .. } => {
+                let result = do_hover(&page, target, *action_timeout, shadow_root, iframe, verbose).await;
                 if let Err(e) = result {
                     handle_action_error(ws_url, e, on_error, on_timeout, context, verbose, flows).await?;
                 }
@@ -168,8 +166,7 @@ pub async fn run_actions(
                 Box::pin(run_actions(ws_url, branch, context, verbose, flows)).await?;
             }
             Action::Read {
-                xpath,
-                css,
+                target,
                 to,
                 html,
                 timeout: action_timeout,
@@ -178,7 +175,7 @@ pub async fn run_actions(
                 shadow_root,
                 iframe,
             } => {
-                let result = do_read(&page, context, xpath, css, to, *html, *action_timeout, shadow_root, iframe, verbose).await;
+                let result = do_read(&page, context, target, to, *html, *action_timeout, shadow_root, iframe, verbose).await;
                 if let Err(e) = result {
                     handle_action_error(ws_url, e, on_error, on_timeout, context, verbose, flows).await?;
                 }
@@ -249,8 +246,7 @@ async fn do_type(
     page: &Arc<ferridriver::Page>,
     context: &mut Context,
     value: &str,
-    xpath: &Option<String>,
-    css: &Option<String>,
+    target: &Option<String>,
     secret: bool,
     action_timeout: Option<u64>,
     shadow_root: &Option<SelectorPath>,
@@ -258,7 +254,7 @@ async fn do_type(
     verbose: bool,
 ) -> Result<(), Error> {
     let resolved_value = context.resolve_value_with_url(value, Some(&page.url()))?;
-    let sel = selector::parse_selector(xpath.clone(), css.clone())?;
+    let sel = selector::parse_selector(target.clone())?;
     if let Some(selector) = &sel {
         ensure_page_initialized(page).await?;
         let selector_str = selector_to_string(selector);
@@ -382,14 +378,13 @@ fn build_shadow_dom_js_for_action(
 
 async fn do_click(
     page: &Arc<ferridriver::Page>,
-    xpath: &Option<String>,
-    css: &Option<String>,
+    target: &Option<String>,
     action_timeout: Option<u64>,
     shadow_root: &Option<SelectorPath>,
     iframe: &Option<SelectorPath>,
     verbose: bool,
 ) -> Result<(), Error> {
-    let sel = selector::parse_selector(xpath.clone(), css.clone())?;
+    let sel = selector::parse_selector(target.clone())?;
     if let Some(selector) = &sel {
         ensure_page_initialized(page).await?;
         let selector_str = selector_to_string(selector);
@@ -418,14 +413,13 @@ async fn do_click(
 
 async fn do_hover(
     page: &Arc<ferridriver::Page>,
-    xpath: &Option<String>,
-    css: &Option<String>,
+    target: &Option<String>,
     action_timeout: Option<u64>,
     shadow_root: &Option<SelectorPath>,
     iframe: &Option<SelectorPath>,
     verbose: bool,
 ) -> Result<(), Error> {
-    let sel = selector::parse_selector(xpath.clone(), css.clone())?;
+    let sel = selector::parse_selector(target.clone())?;
     if let Some(selector) = &sel {
         ensure_page_initialized(page).await?;
         let selector_str = selector_to_string(selector);
@@ -456,8 +450,7 @@ async fn do_wait(
     page: &Arc<ferridriver::Page>,
     context: &mut Context,
     url: &Option<String>,
-    xpath: &Option<String>,
-    css: &Option<String>,
+    target: &Option<String>,
     duration: &Option<u64>,
     action_timeout: Option<u64>,
     shadow_root: &Option<SelectorPath>,
@@ -479,7 +472,7 @@ async fn do_wait(
             }
             wait_for_url(page, &resolved_url, timeout).await?;
         } else {
-            let sel = selector::parse_selector(xpath.clone(), css.clone())?;
+            let sel = selector::parse_selector(target.clone())?;
             if let Some(selector) = &sel {
                 let selector_str = selector_to_string(selector);
                 if verbose {
@@ -506,8 +499,7 @@ async fn do_wait(
 async fn do_read(
     page: &Arc<ferridriver::Page>,
     context: &mut Context,
-    xpath: &Option<String>,
-    css: &Option<String>,
+    target: &Option<String>,
     to: &Option<String>,
     html: bool,
     action_timeout: Option<u64>,
@@ -516,7 +508,7 @@ async fn do_read(
     verbose: bool,
 ) -> Result<(), Error> {
     ensure_page_initialized(page).await?;
-    let sel = selector::parse_selector(xpath.clone(), css.clone())?;
+    let sel = selector::parse_selector(target.clone())?;
     if let Some(selector) = &sel {
         let selector_str = selector_to_string(selector);
         if verbose {
@@ -694,14 +686,14 @@ async fn evaluate_condition(
 ) -> Result<bool, Error> {
     match condition {
         Condition::XPath(x) => {
-            let sel = selector::parse_selector(Some(x.clone()), None)?;
+            let sel = selector::parse_selector(Some(x.clone()))?;
             if verbose {
                 eprintln!("[EXEC] if: xpath={}", x);
             }
             check_condition(page, sel.as_ref(), verbose).await
         }
         Condition::Css(c) => {
-            let sel = selector::parse_selector(None, Some(c.clone()))?;
+            let sel = selector::parse_selector(Some(c.clone()))?;
             if verbose {
                 eprintln!("[EXEC] if: css={}", c);
             }

@@ -5,14 +5,10 @@ pub fn detect(raw: impl Into<String>) -> Selector {
     Selector::new(raw)
 }
 
-pub fn parse_selector(xpath: Option<String>, css: Option<String>) -> Result<Option<Selector>, Error> {
-    match (xpath, css) {
-        (Some(s), None) => Ok(Some(Selector::XPath(s))),
-        (None, Some(s)) => Ok(Some(Selector::Css(s))),
-        (Some(x), Some(c)) => Err(Error::SelectorParse(format!(
-            "Both xpath and css provided: xpath={}, css={}", x, c
-        ))),
-        (None, None) => Ok(None),
+pub fn parse_selector(target: Option<String>) -> Result<Option<Selector>, Error> {
+    match target {
+        Some(s) => Ok(Some(Selector::new(s))),
+        None => Ok(None),
     }
 }
 

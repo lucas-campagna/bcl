@@ -124,8 +124,7 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
         }
         "type" => {
             let value = parse_string_value(first_val)?;
-            let mut xpath = None;
-            let mut css = None;
+            let mut target = None;
             let mut secret = false;
             let mut timeout = None;
             let mut on_error = None;
@@ -134,8 +133,7 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
             let mut iframe = None;
             for (key, val) in action_keys.iter().zip(action_values.iter()).skip(1) {
                 match key.as_str() {
-                    "xpath" => xpath = parse_string_value(val).ok(),
-                    "css" => css = parse_string_value(val).ok(),
+                    "target" => target = parse_string_value(val).ok(),
                     "secret" => secret = val.as_bool().unwrap_or(false),
                     "timeout" => timeout = parse_timeout_value(val),
                     "on_error" => on_error = Some(parse_actions_from_value(val)),
@@ -145,27 +143,21 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
                     _ => {}
                 }
             }
-            Ok(Some(Action::Type { value, xpath, css, secret, timeout, on_error, on_timeout, shadow_root, iframe }))
+            Ok(Some(Action::Type { value, target, secret, timeout, on_error, on_timeout, shadow_root, iframe }))
         }
         "click" => {
-            let mut xpath = None;
-            let mut css = None;
+            let mut target = None;
             let mut timeout = None;
             let mut on_error = None;
             let mut on_timeout = None;
             let mut shadow_root = None;
             let mut iframe = None;
             if let serde_yaml::Value::String(s) = first_val {
-                if s.starts_with('/') || s.starts_with("//") {
-                    xpath = Some(s.clone());
-                } else {
-                    css = Some(s.clone());
-                }
+                target = Some(s.clone());
             }
             for (key, val) in action_keys.iter().zip(action_values.iter()).skip(1) {
                 match key.as_str() {
-                    "xpath" => xpath = parse_string_value(val).ok(),
-                    "css" => css = parse_string_value(val).ok(),
+                    "target" => target = parse_string_value(val).ok(),
                     "timeout" => timeout = parse_timeout_value(val),
                     "on_error" => on_error = Some(parse_actions_from_value(val)),
                     "on_timeout" => on_timeout = Some(parse_actions_from_value(val)),
@@ -174,7 +166,7 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
                     _ => {}
                 }
             }
-            Ok(Some(Action::Click { xpath, css, timeout, on_error, on_timeout, shadow_root, iframe }))
+            Ok(Some(Action::Click { target, timeout, on_error, on_timeout, shadow_root, iframe }))
         }
         "press" => {
             let key_name = parse_string_value(first_val)?;
@@ -182,8 +174,7 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
         }
         "wait" => {
             let mut url = None;
-            let mut xpath = None;
-            let mut css = None;
+            let mut target = None;
             let mut duration = None;
             let mut timeout = None;
             let mut on_error = None;
@@ -191,10 +182,10 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
             let mut shadow_root = None;
             let mut iframe = None;
             if let serde_yaml::Value::String(s) = first_val {
-                if s.starts_with('/') || s.starts_with("//") {
-                    xpath = Some(s.clone());
-                } else if s.contains("://") {
+                if s.contains("://") {
                     url = Some(s.clone());
+                } else {
+                    target = Some(s.clone());
                 }
             } else if let serde_yaml::Value::Number(n) = first_val {
                 if let Some(ms) = n.as_u64() {
@@ -204,8 +195,7 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
             for (key, val) in action_keys.iter().zip(action_values.iter()).skip(1) {
                 match key.as_str() {
                     "url" => url = parse_string_value(val).ok(),
-                    "xpath" => xpath = parse_string_value(val).ok(),
-                    "css" => css = parse_string_value(val).ok(),
+                    "target" => target = parse_string_value(val).ok(),
                     "duration" => {
                         if let serde_yaml::Value::Number(n) = val {
                             duration = n.as_u64();
@@ -219,7 +209,7 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
                     _ => {}
                 }
             }
-            Ok(Some(Action::Wait { url, xpath, css, duration, timeout, on_error, on_timeout, shadow_root, iframe }))
+            Ok(Some(Action::Wait { url, target, duration, timeout, on_error, on_timeout, shadow_root, iframe }))
         }
         "ask" => {
             let prompt = parse_string_value(first_val)?;
@@ -234,24 +224,18 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
             Ok(Some(Action::Ask { prompt, to }))
         }
         "hover" => {
-            let mut xpath = None;
-            let mut css = None;
+            let mut target = None;
             let mut timeout = None;
             let mut on_error = None;
             let mut on_timeout = None;
             let mut shadow_root = None;
             let mut iframe = None;
             if let serde_yaml::Value::String(s) = first_val {
-                if s.starts_with('/') || s.starts_with("//") {
-                    xpath = Some(s.clone());
-                } else {
-                    css = Some(s.clone());
-                }
+                target = Some(s.clone());
             }
             for (key, val) in action_keys.iter().zip(action_values.iter()).skip(1) {
                 match key.as_str() {
-                    "xpath" => xpath = parse_string_value(val).ok(),
-                    "css" => css = parse_string_value(val).ok(),
+                    "target" => target = parse_string_value(val).ok(),
                     "timeout" => timeout = parse_timeout_value(val),
                     "on_error" => on_error = Some(parse_actions_from_value(val)),
                     "on_timeout" => on_timeout = Some(parse_actions_from_value(val)),
@@ -260,7 +244,7 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
                     _ => {}
                 }
             }
-            Ok(Some(Action::Hover { xpath, css, timeout, on_error, on_timeout, shadow_root, iframe }))
+            Ok(Some(Action::Hover { target, timeout, on_error, on_timeout, shadow_root, iframe }))
         }
         "if" => {
             let mut condition = None;
@@ -308,14 +292,9 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
             }
         }
         "read" => {
-            let mut xpath = None;
-            let mut css = None;
+            let mut target = None;
             if let serde_yaml::Value::String(s) = first_val {
-                if s.starts_with('/') || s.starts_with("//") {
-                    xpath = Some(s.clone());
-                } else {
-                    css = Some(s.clone());
-                }
+                target = Some(s.clone());
             }
             let mut to = None;
             let mut html = false;
@@ -326,8 +305,7 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
             let mut iframe = None;
             for (key, val) in action_keys.iter().zip(action_values.iter()).skip(1) {
                 match key.as_str() {
-                    "xpath" => xpath = parse_string_value(val).ok(),
-                    "css" => css = parse_string_value(val).ok(),
+                    "target" => target = parse_string_value(val).ok(),
                     "to" => to = parse_string_value(val).ok(),
                     "html" => html = parse_bool_value(val).unwrap_or(false),
                     "timeout" => timeout = parse_timeout_value(val),
@@ -338,7 +316,7 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
                     _ => {}
                 }
             }
-            Ok(Some(Action::Read { xpath, css, to, html, timeout, on_error, on_timeout, shadow_root, iframe }))
+            Ok(Some(Action::Read { target, to, html, timeout, on_error, on_timeout, shadow_root, iframe }))
         }
         "log" => {
             let text = parse_string_value(first_val)?;
@@ -472,21 +450,20 @@ auth:
     }
 
     #[test]
-    fn test_parse_type_with_xpath() {
+    fn test_parse_type_with_target() {
         let yaml = r#"
 # flow name
 auth:
   - type: $CPF
-    xpath: //*[@id="input"]
+    target: //*[@id="input"]
 "#;
         let flow_file = parse_str(yaml).unwrap();
         let actions = flow_file.get("auth").unwrap();
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            Action::Type { value, xpath, css, .. } => {
+            Action::Type { value, target, .. } => {
                 assert_eq!(value, "$CPF");
-                assert_eq!(xpath.as_ref().unwrap(), "//*[@id=\"input\"]");
-                assert!(css.is_none());
+                assert_eq!(target.as_ref().unwrap(), "//*[@id=\"input\"]");
             }
             _ => panic!("Expected Type action"),
         }
@@ -498,16 +475,16 @@ auth:
 # flow name
 auth:
   - type: $PASSWORD
-    xpath: //*[@id="pwd"]
+    target: //*[@id="pwd"]
     secret: true
 "#;
         let flow_file = parse_str(yaml).unwrap();
         let actions = flow_file.get("auth").unwrap();
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            Action::Type { value, xpath, css: _, secret, .. } => {
+            Action::Type { value, target, secret, .. } => {
                 assert_eq!(value, "$PASSWORD");
-                assert_eq!(xpath.as_ref().unwrap(), "//*[@id=\"pwd\"]");
+                assert_eq!(target.as_ref().unwrap(), "//*[@id=\"pwd\"]");
                 assert!(*secret);
             }
             _ => panic!("Expected Type action"),
@@ -703,9 +680,8 @@ test:
         let actions = flow_file.get("test").unwrap();
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            Action::Read { xpath, css, to, html, .. } => {
-                assert_eq!(xpath.as_ref().unwrap(), "//*[@id=\"title\"]");
-                assert!(css.is_none());
+            Action::Read { target, to, html, .. } => {
+                assert_eq!(target.as_ref().unwrap(), "//*[@id=\"title\"]");
                 assert_eq!(to.as_ref().unwrap(), "TITLE");
                 assert!(!*html);
             }
@@ -723,9 +699,8 @@ test:
         let actions = flow_file.get("test").unwrap();
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            Action::Read { xpath, css, to, html, .. } => {
-                assert_eq!(xpath.as_ref().unwrap(), "//*[@id=\"title\"]");
-                assert!(css.is_none());
+            Action::Read { target, to, html, .. } => {
+                assert_eq!(target.as_ref().unwrap(), "//*[@id=\"title\"]");
                 assert!(to.is_none());
                 assert!(!*html);
             }
@@ -745,9 +720,8 @@ test:
         let actions = flow_file.get("test").unwrap();
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            Action::Read { xpath, css, to, html, .. } => {
-                assert_eq!(xpath.as_ref().unwrap(), "//*[@id=\"content\"]");
-                assert!(css.is_none());
+            Action::Read { target, to, html, .. } => {
+                assert_eq!(target.as_ref().unwrap(), "//*[@id=\"content\"]");
                 assert_eq!(to.as_ref().unwrap(), "CONTENT");
                 assert!(*html);
             }
@@ -767,9 +741,8 @@ test:
         let actions = flow_file.get("test").unwrap();
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            Action::Read { xpath, css, to, html, .. } => {
-                assert!(xpath.is_none());
-                assert_eq!(css.as_ref().unwrap(), ".message");
+            Action::Read { target, to, html, .. } => {
+                assert_eq!(target.as_ref().unwrap(), ".message");
                 assert_eq!(to.as_ref().unwrap(), "MSG");
                 assert!(!*html);
             }
@@ -789,9 +762,8 @@ test:
         let actions = flow_file.get("test").unwrap();
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            Action::Click { xpath, css, shadow_root, iframe, .. } => {
-                assert!(xpath.is_none());
-                assert_eq!(css.as_ref().unwrap(), "#button");
+            Action::Click { target, shadow_root, iframe, .. } => {
+                assert_eq!(target.as_ref().unwrap(), "#button");
                 assert_eq!(shadow_root.as_ref().unwrap(), &crate::flow::SelectorPath::Single("#inner-shadow".to_string()));
                 assert_eq!(iframe.as_ref().unwrap(), &crate::flow::SelectorPath::Single("#frame1".to_string()));
             }
@@ -804,7 +776,7 @@ test:
         let yaml = r##"
 test:
   - type: "hello world"
-    xpath: "//input[@id='search']"
+    target: "//input[@id='search']"
     shadow_root:
       - "#outer"
       - "#inner"
@@ -813,8 +785,8 @@ test:
         let actions = flow_file.get("test").unwrap();
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            Action::Type { xpath, shadow_root, .. } => {
-                assert_eq!(xpath.as_ref().unwrap(), "//input[@id='search']");
+            Action::Type { target, shadow_root, .. } => {
+                assert_eq!(target.as_ref().unwrap(), "//input[@id='search']");
                 assert_eq!(
                     shadow_root.as_ref().unwrap(),
                     &crate::flow::SelectorPath::Multiple(vec![
@@ -839,10 +811,9 @@ test:
         let actions = flow_file.get("test").unwrap();
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            Action::Wait { url, xpath, css, shadow_root, duration, .. } => {
+            Action::Wait { url, target, shadow_root, duration, .. } => {
                 assert!(url.is_none());
-                assert!(css.is_none());
-                assert_eq!(xpath.as_ref().unwrap(), "//div[@class='loading']");
+                assert_eq!(target.as_ref().unwrap(), "//div[@class='loading']");
                 assert_eq!(shadow_root.as_ref().unwrap(), &crate::flow::SelectorPath::Single("#shadow-container".to_string()));
                 assert_eq!(*duration, Some(500));
             }

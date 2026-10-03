@@ -49,8 +49,7 @@ pub enum Action {
     Goto { url: String, wait_until: Option<String> },
     Type {
         value: String,
-        xpath: Option<String>,
-        css: Option<String>,
+        target: Option<String>,
         #[serde(default)] secret: bool,
         #[serde(default)] timeout: Option<u64>,
         #[serde(default)] on_error: Option<Vec<Action>>,
@@ -59,8 +58,7 @@ pub enum Action {
         #[serde(default)] iframe: Option<SelectorPath>,
     },
     Click {
-        xpath: Option<String>,
-        css: Option<String>,
+        target: Option<String>,
         #[serde(default)] timeout: Option<u64>,
         #[serde(default)] on_error: Option<Vec<Action>>,
         #[serde(default)] on_timeout: Option<Vec<Action>>,
@@ -70,8 +68,7 @@ pub enum Action {
     Press { key: String },
     Wait {
         url: Option<String>,
-        xpath: Option<String>,
-        css: Option<String>,
+        target: Option<String>,
         duration: Option<u64>,
         #[serde(default)] timeout: Option<u64>,
         #[serde(default)] on_error: Option<Vec<Action>>,
@@ -81,8 +78,7 @@ pub enum Action {
     },
     Ask { prompt: String, to: String },
     Hover {
-        xpath: Option<String>,
-        css: Option<String>,
+        target: Option<String>,
         #[serde(default)] timeout: Option<u64>,
         #[serde(default)] on_error: Option<Vec<Action>>,
         #[serde(default)] on_timeout: Option<Vec<Action>>,
@@ -98,8 +94,7 @@ pub enum Action {
         else_: Vec<Action>,
     },
     Read {
-        xpath: Option<String>,
-        css: Option<String>,
+        target: Option<String>,
         to: Option<String>,
         #[serde(default)] html: bool,
         #[serde(default)] timeout: Option<u64>,

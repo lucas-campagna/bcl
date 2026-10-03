@@ -67,8 +67,7 @@ mod tests {
             Action::Goto { url: html.to_string(), wait_until: Some("commit".to_string()) },
             Action::Type {
                 value: "$CODE".to_string(),
-                xpath: Some("//input".to_string()),
-                css: None,
+                target: Some("//input".to_string()),
                 secret: false,
                 timeout: None,
                 on_error: None,
