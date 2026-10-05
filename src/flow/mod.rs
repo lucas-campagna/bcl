@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub mod parser;
+pub mod validator;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Flow {
@@ -97,6 +98,8 @@ pub enum Action {
         target: Option<String>,
         to: Option<String>,
         #[serde(default)] html: bool,
+        #[serde(default)] attribute: Option<String>,
+        #[serde(default)] value: bool,
         #[serde(default)] timeout: Option<u64>,
         #[serde(default)] on_error: Option<Vec<Action>>,
         #[serde(default)] on_timeout: Option<Vec<Action>>,
@@ -107,6 +110,125 @@ pub enum Action {
     Call { flow: String, #[serde(default)] params: std::collections::HashMap<String, serde_yaml::Value> },
     Js { code: String, to: Option<String>, #[serde(default)] on_error: Option<Vec<Action>> },
     Define { var: String, value: serde_yaml::Value, #[serde(default = "default_true")] overwrite: bool },
+    Select {
+        value: String,
+        target: Option<String>,
+        values: Vec<String>,
+        #[serde(default)] timeout: Option<u64>,
+        #[serde(default)] on_error: Option<Vec<Action>>,
+        #[serde(default)] on_timeout: Option<Vec<Action>>,
+        #[serde(default)] shadow_root: Option<SelectorPath>,
+        #[serde(default)] iframe: Option<SelectorPath>,
+    },
+    Check {
+        target: Option<String>,
+        #[serde(default)] timeout: Option<u64>,
+        #[serde(default)] on_error: Option<Vec<Action>>,
+        #[serde(default)] on_timeout: Option<Vec<Action>>,
+        #[serde(default)] shadow_root: Option<SelectorPath>,
+        #[serde(default)] iframe: Option<SelectorPath>,
+    },
+    Uncheck {
+        target: Option<String>,
+        #[serde(default)] timeout: Option<u64>,
+        #[serde(default)] on_error: Option<Vec<Action>>,
+        #[serde(default)] on_timeout: Option<Vec<Action>>,
+        #[serde(default)] shadow_root: Option<SelectorPath>,
+        #[serde(default)] iframe: Option<SelectorPath>,
+    },
+    DblClick {
+        target: Option<String>,
+        #[serde(default)] timeout: Option<u64>,
+        #[serde(default)] on_error: Option<Vec<Action>>,
+        #[serde(default)] on_timeout: Option<Vec<Action>>,
+        #[serde(default)] shadow_root: Option<SelectorPath>,
+        #[serde(default)] iframe: Option<SelectorPath>,
+    },
+    RightClick {
+        target: Option<String>,
+        #[serde(default)] timeout: Option<u64>,
+        #[serde(default)] on_error: Option<Vec<Action>>,
+        #[serde(default)] on_timeout: Option<Vec<Action>>,
+        #[serde(default)] shadow_root: Option<SelectorPath>,
+        #[serde(default)] iframe: Option<SelectorPath>,
+    },
+    Clear {
+        target: Option<String>,
+        #[serde(default)] timeout: Option<u64>,
+        #[serde(default)] on_error: Option<Vec<Action>>,
+        #[serde(default)] on_timeout: Option<Vec<Action>>,
+        #[serde(default)] shadow_root: Option<SelectorPath>,
+        #[serde(default)] iframe: Option<SelectorPath>,
+    },
+    Upload {
+        files: Vec<String>,
+        target: Option<String>,
+        #[serde(default)] timeout: Option<u64>,
+        #[serde(default)] on_error: Option<Vec<Action>>,
+        #[serde(default)] on_timeout: Option<Vec<Action>>,
+        #[serde(default)] shadow_root: Option<SelectorPath>,
+        #[serde(default)] iframe: Option<SelectorPath>,
+    },
+    Drag {
+        source: String,
+        to: String,
+        #[serde(default)] timeout: Option<u64>,
+        #[serde(default)] on_error: Option<Vec<Action>>,
+        #[serde(default)] on_timeout: Option<Vec<Action>>,
+        #[serde(default)] shadow_root: Option<SelectorPath>,
+        #[serde(default)] iframe: Option<SelectorPath>,
+    },
+    Scroll {
+        target: String,
+        x: Option<i64>,
+        y: Option<i64>,
+        #[serde(default)] timeout: Option<u64>,
+        #[serde(default)] on_error: Option<Vec<Action>>,
+        #[serde(default)] on_timeout: Option<Vec<Action>>,
+        #[serde(default)] shadow_root: Option<SelectorPath>,
+        #[serde(default)] iframe: Option<SelectorPath>,
+    },
+    Dialog {
+        mode: String,
+        #[serde(default)] prompt_text: Option<String>,
+        #[serde(default)] timeout: Option<u64>,
+    },
+    Download {
+        path: String,
+        #[serde(default)] timeout: Option<u64>,
+        #[serde(default)] to: Option<String>,
+    },
+    For {
+        items: serde_yaml::Value,
+        as_: String,
+        do_: Vec<Action>,
+    },
+    While {
+        condition: Condition,
+        do_: Vec<Action>,
+        max: Option<u64>,
+    },
+    Retry {
+        attempts: u64,
+        interval: Option<u64>,
+        do_: Vec<Action>,
+    },
+    Assert {
+        condition: Condition,
+        message: Option<String>,
+    },
+    Return {
+        values: std::collections::HashMap<String, serde_yaml::Value>,
+    },
+    Fail {
+        message: String,
+    },
+    Save {
+        path: String,
+    },
+    Load {
+        path: String,
+    },
 }
 
 fn default_true() -> bool { true }
@@ -119,6 +241,13 @@ pub enum Condition {
     Url(String),
     Defined(String),
     Not(Box<Condition>),
+    Text { target: String, contains: String },
+    Visible(Option<String>),
+    Checked(Option<String>),
+    Enabled(Option<String>),
+    Equals { var: String, value: String },
+    And(Vec<Condition>),
+    Or(Vec<Condition>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -317,6 +446,10 @@ impl Context {
     pub fn resolve_value_with_url(&self, input: &str, current_url: Option<&str>) -> Result<String, Error> {
         Ok(self.resolve_with_url(input, current_url))
     }
+
+    pub fn vars(&self) -> &std::collections::HashMap<String, serde_yaml::Value> {
+        &self.vars
+    }
 }
 
 use thiserror::Error;
@@ -352,6 +485,9 @@ pub enum Error {
 
     #[error("Invalid action: {0}")]
     InvalidAction(String),
+
+    #[error("Assertion failed: {0}")]
+    Assertion(String),
 }
 
 #[cfg(test)]

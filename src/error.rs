@@ -32,6 +32,9 @@ pub enum Error {
 
     #[error("Invalid action: {0}")]
     InvalidAction(String),
+
+    #[error("Assertion failed: {0}")]
+    Assertion(String),
 }
 
 impl From<FlowError> for Error {
@@ -47,6 +50,7 @@ impl From<FlowError> for Error {
             FlowError::Io(e) => Error::Io(e),
             FlowError::AskRequiresCli => Error::AskRequiresCli,
             FlowError::InvalidAction(e) => Error::InvalidAction(e),
+            FlowError::Assertion(e) => Error::Assertion(e),
         }
     }
 }

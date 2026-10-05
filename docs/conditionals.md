@@ -16,10 +16,17 @@ else:
 | Condition | Description |
 |-----------|-------------|
 | `url` | Match current URL |
-| `xpath` | Match XPath selector exists |
-| `css` | Match CSS selector exists |
+| `xpath` | XPath selector exists |
+| `css` | CSS selector exists |
 | `defined` | Variable is defined |
 | `not` | Negate a condition |
+| `text` | Element contains text |
+| `visible` | Element is visible |
+| `checked` | Checkbox/radio is checked |
+| `enabled` | Element is enabled |
+| `equals` | Variable equals a value |
+| `and` | All conditions true |
+| `or` | Any condition true |
 
 ## Examples
 
@@ -50,4 +57,55 @@ if:
 then:
   - ask: Please provide token
     to: TOKEN
+```
+
+### Element Visible
+
+```yaml
+if:
+  visible: "#loading-spinner"
+then:
+  - wait: 1000
+```
+
+### Element Contains Text
+
+```yaml
+if:
+  text:
+    target: "#message"
+    contains: "Success"
+then:
+  - log: Operation succeeded
+```
+
+### Variable Equals
+
+```yaml
+if:
+  equals:
+    var: $STATUS
+    value: ok
+then:
+  - log: All good
+```
+
+### Combining Conditions
+
+```yaml
+if:
+  and:
+    - visible: "#submit-btn"
+    - enabled: "#submit-btn"
+then:
+  - click: "#submit-btn"
+```
+
+```yaml
+if:
+  or:
+    - xpath: //button[@id='a']
+    - css: "#fallback"
+then:
+  - click: //button
 ```
