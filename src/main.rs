@@ -1,5 +1,5 @@
 use clap::Parser;
-use bcl::{parse_file, Context, FlowRuntime, run_actions};
+use bcl::{parse_file, parse_stdin, Context, FlowRuntime, run_actions};
 use serde::Serialize;
 use std::path::PathBuf;
 
@@ -19,13 +19,15 @@ pub enum Cli {
         /// Path to the YAML file
         path: PathBuf,
     },
+    /// Compile a YAML flow file into a standalone shell script
+    Compile(CompileArgs),
 }
 
 #[derive(Parser, Debug)]
 pub struct RunArgs {
     /// Name of the flow to execute
     pub flow_name: String,
-    /// Path to the YAML file containing the flow definition
+    /// Path to the YAML file containing the flow definition (use - for stdin)
     pub path: PathBuf,
     /// Output format: simple, pretty, json
     #[arg(short, long, default_value = "simple")]
@@ -39,6 +41,16 @@ pub struct RunArgs {
     /// Dry-run — parse and resolve variables, print actions, do not connect to browser
     #[arg(long)]
     pub dry_run: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct CompileArgs {
+    /// Path to the YAML file to compile
+    pub yaml_path: PathBuf,
+    /// Optional name for the output file (without extension)
+    /// If not provided, uses the YAML filename without extension
+    #[arg(short, long)]
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize)]
@@ -89,16 +101,30 @@ fn apply_vars(context: &mut Context, vars: &[String]) {
 
 async fn run_flow(args: &RunArgs) -> anyhow::Result<()> {
     if args.verbose {
-        eprintln!("Loading flow '{}' from {:?}", args.flow_name, args.path);
+        let source = if args.path == PathBuf::from("-") {
+            "stdin".to_string()
+        } else {
+            format!("{:?}", args.path)
+        };
+        eprintln!("Loading flow '{}' from {}", args.flow_name, source);
         eprintln!("Connecting to Playwright at: {}", get_browser_url());
     }
 
-    let flow_file = parse_file(&args.path).map_err(|e| {
-        if args.verbose {
-            eprintln!("Failed to parse YAML: {}", e);
-        }
-        anyhow::anyhow!("Failed to parse YAML: {}", e)
-    })?;
+    let flow_file = if args.path == PathBuf::from("-") {
+        parse_stdin().map_err(|e| {
+            if args.verbose {
+                eprintln!("Failed to read YAML from stdin: {}", e);
+            }
+            anyhow::anyhow!("Failed to read YAML from stdin: {}", e)
+        })?
+    } else {
+        parse_file(&args.path).map_err(|e| {
+            if args.verbose {
+                eprintln!("Failed to parse YAML: {}", e);
+            }
+            anyhow::anyhow!("Failed to parse YAML: {}", e)
+        })?
+    };
 
     let actions = flow_file.get(&args.flow_name).ok_or_else(|| {
         if args.verbose {
@@ -178,12 +204,21 @@ async fn run_flow(args: &RunArgs) -> anyhow::Result<()> {
 }
 
 fn validate_file(path: &PathBuf, verbose: bool) -> anyhow::Result<()> {
-    let flow_file = parse_file(path).map_err(|e| {
-        if verbose {
-            eprintln!("Failed to parse YAML: {}", e);
-        }
-        anyhow::anyhow!("Failed to parse YAML: {}", e)
-    })?;
+    let flow_file = if path == &PathBuf::from("-") {
+        parse_stdin().map_err(|e| {
+            if verbose {
+                eprintln!("Failed to read YAML from stdin: {}", e);
+            }
+            anyhow::anyhow!("Failed to read YAML from stdin: {}", e)
+        })?
+    } else {
+        parse_file(path).map_err(|e| {
+            if verbose {
+                eprintln!("Failed to parse YAML: {}", e);
+            }
+            anyhow::anyhow!("Failed to parse YAML: {}", e)
+        })?
+    };
 
     let mut warnings = Vec::new();
 
@@ -205,9 +240,19 @@ fn validate_file(path: &PathBuf, verbose: bool) -> anyhow::Result<()> {
 }
 
 fn list_flows(path: &PathBuf) -> anyhow::Result<()> {
-    let flow_file = parse_file(path).map_err(|e| anyhow::anyhow!("Failed to parse YAML: {}", e))?;
+    let flow_file = if path == &PathBuf::from("-") {
+        parse_stdin().map_err(|e| anyhow::anyhow!("Failed to read YAML from stdin: {}", e))?
+    } else {
+        parse_file(path).map_err(|e| anyhow::anyhow!("Failed to parse YAML: {}", e))?
+    };
 
-    println!("Flows in {:?}:", path);
+    let source = if path == &PathBuf::from("-") {
+        "stdin".to_string()
+    } else {
+        format!("{:?}", path)
+    };
+
+    println!("Flows in {}:", source);
     let mut names: Vec<_> = flow_file.flows.keys().collect();
     names.sort();
     for name in names {
@@ -215,6 +260,124 @@ fn list_flows(path: &PathBuf) -> anyhow::Result<()> {
         println!("  {} ({} action(s))", name, count);
     }
     println!("({} total)", flow_file.flows.len());
+    Ok(())
+}
+
+fn compile_flow(yaml_path: &PathBuf, name: Option<&str>) -> anyhow::Result<()> {
+    let yaml_content = std::fs::read_to_string(yaml_path)
+        .map_err(|e| anyhow::anyhow!("Failed to read YAML file: {}", e))?;
+
+    let flow_file = parse_file(yaml_path)
+        .map_err(|e| anyhow::anyhow!("Failed to parse YAML: {}", e))?;
+
+    let flows: Vec<String> = flow_file.flows.keys().cloned().collect();
+    if flows.is_empty() {
+        return Err(anyhow::anyhow!("No flows found in YAML file"));
+    }
+
+    let encoded_yaml = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &yaml_content);
+
+    let output_name = name.map(|s| s.to_string()).unwrap_or_else(|| {
+        yaml_path.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("output")
+            .to_string()
+    });
+
+    let flows_list = flows.iter()
+        .map(|f| format!("  {}   - Execute the {} flow", f, f))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let flows_pattern = flows.iter()
+        .map(|f| format!("\"{}\"", f))
+        .collect::<Vec<_>>()
+        .join("|");
+
+    let script = format!(r#"#!/bin/bash
+# Auto-generated by bcl compile
+# Source: {:?}
+# Flows: {}
+
+set -e
+
+show_help() {{
+    cat << EOF
+Usage: $(basename "$0") <flow> [options]
+
+Available flows:
+{}
+
+Options:
+  --verbose, -v     Enable verbose output
+  --dry-run         Parse and print actions without executing
+  --help, -h        Show this help
+
+Environment variables are passed directly to bcl run.
+
+Examples:
+  USERNAME=me PASSWORD=secret $(basename "$0") {}
+  QUERY="hello" $(basename "$0") {} --verbose
+EOF
+}}
+
+ENCODED_YAML='{}'
+
+FLOW_NAME=""
+VERBOSE=false
+DRY_RUN=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        {})
+            FLOW_NAME="$1"
+            shift
+            ;;
+        --verbose|-v)
+            VERBOSE=true
+            shift
+            ;;
+        --dry-run)
+            DRY_RUN=true
+            shift
+            ;;
+        --help|-h)
+            show_help
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            show_help
+            exit 1
+            ;;
+    esac
+done
+
+if [[ -z "$FLOW_NAME" ]]; then
+    echo "Error: flow name required"
+    show_help
+    exit 1
+fi
+
+YAML_CONTENT=$(echo "$ENCODED_YAML" | base64 -d)
+
+EXTRA_ARGS=()
+[[ "$VERBOSE" == "true" ]] && EXTRA_ARGS+=(--verbose)
+[[ "$DRY_RUN" == "true" ]] && EXTRA_ARGS+=(--dry-run)
+
+exec bcl run "$FLOW_NAME" - "${{EXTRA_ARGS[@]}}" <<< "$YAML_CONTENT"
+"#, yaml_path, flows.join(", "), flows_list, flows[0], flows[0], encoded_yaml, flows_pattern);
+
+    let output_path = std::path::Path::new(&output_name);
+    std::fs::write(output_path, &script)?;
+    
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(output_path, std::fs::Permissions::from_mode(0o755))?;
+    }
+
+    println!("Generated: {}", output_name);
     Ok(())
 }
 
@@ -230,6 +393,9 @@ fn main() {
         }
         Cli::List { ref path } => {
             list_flows(path)
+        }
+        Cli::Compile(ref args) => {
+            compile_flow(&args.yaml_path, args.name.as_deref())
         }
     };
 

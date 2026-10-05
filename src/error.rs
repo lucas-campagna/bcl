@@ -35,6 +35,9 @@ pub enum Error {
 
     #[error("Assertion failed: {0}")]
     Assertion(String),
+
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
 }
 
 impl From<FlowError> for Error {

@@ -2,10 +2,17 @@ use crate::error::Error;
 use crate::flow::{Action, Condition, FlowFile};
 use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 
 pub fn parse_file<P: AsRef<Path>>(path: P) -> Result<FlowFile, Error> {
     let content = fs::read_to_string(path)?;
+    parse_str(&content)
+}
+
+pub fn parse_stdin() -> Result<FlowFile, Error> {
+    let mut content = String::new();
+    std::io::stdin().read_to_string(&mut content).map_err(|e| Error::InvalidInput(format!("Failed to read stdin: {}", e)))?;
     parse_str(&content)
 }
 

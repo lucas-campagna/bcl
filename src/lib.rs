@@ -8,5 +8,5 @@ pub use executor::{Context, run_actions};
 pub use flow::{Flow, Action, Selector, FlowFile};
 pub use flow::Context as FlowContext;
 pub use runtime::{FlowRuntime, create_runtime};
-pub use flow::parser::{parse_file, parse_str};
+pub use flow::parser::{parse_file, parse_str, parse_stdin};
 pub use flow::validator;
