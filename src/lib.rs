@@ -9,3 +9,4 @@ pub use flow::{Flow, Action, Selector, FlowFile};
 pub use flow::Context as FlowContext;
 pub use runtime::{FlowRuntime, create_runtime};
 pub use flow::parser::{parse_file, parse_str};
+pub use flow::validator;
