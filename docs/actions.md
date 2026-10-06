@@ -50,11 +50,11 @@ Navigate to a URL with optional wait condition:
 
 ### type
 
-Type text into an element:
+Type text into an element. The `target` field accepts CSS or XPath selectors (automatically detected):
 
 ```yaml
 - type: $USERNAME
-  xpath: //*[@id="username"]
+  target: #username
   secret: true
 ```
 
