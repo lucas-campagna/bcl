@@ -229,9 +229,19 @@ pub enum Action {
     Load {
         path: String,
     },
+    Request {
+        url: String,
+        #[serde(default = "default_get")] method: String,
+        #[serde(default)] headers: std::collections::HashMap<String, String>,
+        #[serde(default)] body: Option<String>,
+        #[serde(default)] to: Option<String>,
+        #[serde(default)] timeout: Option<u64>,
+        #[serde(default)] on_error: Option<Vec<Action>>,
+    },
 }
 
 fn default_true() -> bool { true }
+fn default_get() -> String { "GET".to_string() }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]

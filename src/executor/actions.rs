@@ -3,6 +3,7 @@ use crate::flow::{Action, Condition, Context, FlowFile, Selector, SelectorPath};
 use crate::executor::selector;
 use crate::executor::utils::{get_timeout, parse_builtin_variables, ensure_page_initialized};
 use ferridriver::options::{InputFiles, SelectOptionOptions, SelectOptionValue, SetInputFilesOptions};
+use reqwest::Client;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -450,6 +451,12 @@ pub async fn run_actions(
                     let yaml_value: serde_yaml::Value = serde_yaml::from_value(serde_yaml::Value::String(v.as_str().unwrap_or_default().to_string()))
                         .unwrap_or_else(|_| serde_yaml::Value::String(v.as_str().unwrap_or_default().to_string()));
                     context.set_yaml(&k, yaml_value);
+                }
+            }
+            Action::Request { url, method, headers, body, to, timeout, on_error } => {
+                let result = do_request(context, url, method, headers, body, to, *timeout, verbose).await;
+                if let Err(e) = result {
+                    handle_action_error(ws_url, e, on_error, &None, context, verbose, flows).await?;
                 }
             }
         }
@@ -1469,4 +1476,77 @@ fn ask_user(prompt: &str) -> Result<String, Error> {
         .read_line(&mut input)
         .map_err(|e| Error::Io(e))?;
     Ok(input.trim().to_string())
+}
+
+async fn do_request(
+    context: &mut Context,
+    url: &str,
+    method: &str,
+    headers: &std::collections::HashMap<String, String>,
+    body: &Option<String>,
+    to: &Option<String>,
+    timeout: Option<u64>,
+    verbose: bool,
+) -> Result<(), Error> {
+    let resolved_url = context.resolve(url);
+    if verbose {
+        eprintln!("[EXEC] request: url={}, method={}", resolved_url, method);
+    }
+
+    let client = Client::builder()
+        .timeout(timeout.map(Duration::from_millis).unwrap_or(Duration::from_secs(30)))
+        .build()
+        .map_err(|e| Error::ActionFailed(format!("Failed to create HTTP client: {}", e)))?;
+
+    let mut req_builder = match method.to_uppercase().as_str() {
+        "GET" => client.get(&resolved_url),
+        "POST" => client.post(&resolved_url),
+        "PUT" => client.put(&resolved_url),
+        "DELETE" => client.delete(&resolved_url),
+        "PATCH" => client.patch(&resolved_url),
+        "HEAD" => client.head(&resolved_url),
+        "OPTIONS" => client.request(reqwest::Method::OPTIONS, &resolved_url),
+        _ => return Err(Error::ActionFailed(format!("Unsupported HTTP method: {}", method))),
+    };
+
+    for (k, v) in headers {
+        let resolved_val = context.resolve(v);
+        req_builder = req_builder.header(k, resolved_val);
+    }
+
+    if let Some(body) = body {
+        let resolved_body = context.resolve(body);
+        req_builder = req_builder.body(resolved_body);
+    }
+
+    let response = req_builder.send().await
+        .map_err(|e| Error::ActionFailed(format!("Request failed: {}", e)))?;
+
+    let status = response.status();
+    let body = response.text().await
+        .map_err(|e| Error::ActionFailed(format!("Failed to read response body: {}", e)))?;
+
+    if verbose {
+        eprintln!("[EXEC] request: status={}, body_len={}", status, body.len());
+    }
+
+    let yaml_value: serde_yaml::Value = match serde_json::from_str::<serde_json::Value>(&body) {
+        Ok(json_val) => {
+            let json_str = serde_json::to_string(&json_val).unwrap_or_default();
+            serde_yaml::from_str(&json_str).unwrap_or_else(|_| serde_yaml::Value::String(body))
+        }
+        Err(_) => serde_yaml::Value::String(body),
+    };
+
+    if let Some(var_name) = to {
+        context.set_yaml(var_name, yaml_value);
+    } else {
+        if let Some(yaml_str) = yaml_value.as_str() {
+            println!("{}", yaml_str);
+        } else {
+            println!("{}", serde_yaml::to_string(&yaml_value).unwrap_or_default());
+        }
+    }
+
+    Ok(())
 }
