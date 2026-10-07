@@ -8,7 +8,7 @@ Use `shadow_root` to traverse into shadow roots:
 
 ```yaml
 click:
-  xpath: //button
+  target: //button
   shadow_root: //*[@id="host"]
 ```
 
@@ -18,7 +18,7 @@ Use `iframe` to target elements inside iframes:
 
 ```yaml
 click:
-  xpath: //button
+  target: //button
   iframe: //*[@id="frame"]
 ```
 
@@ -28,7 +28,7 @@ Both can be used together:
 
 ```yaml
 click:
-  xpath: //button
+  target: //button
   shadow_root: //*[@id="shadow-host"]
   iframe: //*[@id="content-frame"]
 ```

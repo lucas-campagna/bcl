@@ -17,7 +17,7 @@ Variables can come from:
     var: USERNAME
     value: john
 - type: $USERNAME
-  xpath: //*[@id="input"]
+  target: //*[@id="input"]
 ```
 
 ## Accessing Properties

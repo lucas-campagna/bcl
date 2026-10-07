@@ -63,7 +63,8 @@ Type text into an element. The `target` field accepts CSS or XPath selectors (au
 Click an element:
 
 ```yaml
-- click: //*[@id="submit"]
+- click:
+    target: //*[@id="submit"]
 ```
 
 ### press
@@ -83,7 +84,7 @@ Wait for conditions:
     url: https://example.com/dashboard
 # or
 - wait:
-    xpath: //*[@id="loaded"]
+    target: //*[@id="loaded"]
 # or
 - wait:
     duration: 5000
@@ -103,7 +104,8 @@ Prompt user for input:
 Hover over an element:
 
 ```yaml
-- hover: //*[@id="menu"]
+- hover:
+    target: //*[@id="menu"]
 ```
 
 ### select
@@ -126,7 +128,8 @@ Select an option from a `<select>` dropdown:
 Check a checkbox or radio button:
 
 ```yaml
-- check: //*[@id="terms"]
+- check:
+    target: //*[@id="terms"]
 ```
 
 ### uncheck
@@ -134,7 +137,8 @@ Check a checkbox or radio button:
 Uncheck a checkbox:
 
 ```yaml
-- uncheck: //*[@id="newsletter"]
+- uncheck:
+    target: //*[@id="newsletter"]
 ```
 
 ### dblclick
@@ -142,7 +146,8 @@ Uncheck a checkbox:
 Double-click an element:
 
 ```yaml
-- dblclick: //*[@id="edit-btn"]
+- dblclick:
+    target: //*[@id="edit-btn"]
 ```
 
 ### right_click
@@ -150,7 +155,8 @@ Double-click an element:
 Right-click (context menu) an element:
 
 ```yaml
-- right_click: //*[@id="row"]
+- right_click:
+    target: //*[@id="row"]
 ```
 
 ### clear
@@ -158,7 +164,8 @@ Right-click (context menu) an element:
 Clear an input field:
 
 ```yaml
-- clear: //*[@id="search"]
+- clear:
+    target: //*[@id="search"]
 ```
 
 ### upload
@@ -189,11 +196,13 @@ Drag an element and drop it onto a target:
 Scroll an element into view (and optionally scroll by wheel):
 
 ```yaml
-- scroll: //*[@id="section"]
+- scroll:
+    target: //*[@id="section"]
 # with wheel scroll delta:
-- scroll: //*[@id="section"]
-  x: 0
-  y: 200
+- scroll:
+    target: //*[@id="section"]
+    x: 0
+    y: 200
 ```
 
 ### read
@@ -202,23 +211,27 @@ Read element text, HTML, an attribute, or an input value:
 
 ```yaml
 # read text content (default)
-- read: //*[@id="result"]
-  to: RESULT
+- read:
+    target: //*[@id="result"]
+    to: RESULT
 
 # read inner HTML
-- read: //*[@id="content"]
-  to: HTML_CONTENT
-  html: true
+- read:
+    target: //*[@id="content"]
+    to: HTML_CONTENT
+    html: true
 
 # read an element attribute
-- read: //*[@id="link"]
-  to: LINK_HREF
-  attribute: href
+- read:
+    target: //*[@id="link"]
+    to: LINK_HREF
+    attribute: href
 
 # read an input field's current value
-- read: //*[@id="field"]
-  to: FIELD_VALUE
-  value: true
+- read:
+    target: //*[@id="field"]
+    to: FIELD_VALUE
+    value: true
 ```
 
 ### log
@@ -310,7 +323,8 @@ Loop while a condition is true:
     condition:
       xpath: //button[@id='more']
   do:
-    - click: //button[@id='more']
+    - click:
+        target: //button[@id='more']
   max: 50
 ```
 

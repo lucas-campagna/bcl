@@ -20,9 +20,7 @@ You can also explicitly specify the selector type:
 ```yaml
 type:
   value: text
-  xpath: //*[@id="input"]
-  # or
-  css: #input
+  target: //*[@id="input"]
 ```
 
 ## Multiple Elements
@@ -31,7 +29,7 @@ When a selector matches multiple elements, the action is applied to each:
 
 ```yaml
 - type: $TOKEN
-  xpath: /html/body//input
+  target: /html/body//input
 ```
 
 This types the value into each matched input element.

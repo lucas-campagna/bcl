@@ -9,7 +9,7 @@ Set a timeout in milliseconds:
 ```yaml
 type:
   value: text
-  xpath: //*[@id="input"]
+  target: //*[@id="input"]
   timeout: 5000
 ```
 
@@ -20,7 +20,7 @@ Actions to execute if the main action fails:
 ```yaml
 type:
   value: text
-  xpath: //*[@id="input"]
+  target: //*[@id="input"]
   on_error:
     - log: Type action failed
     - click: #fallback-input
@@ -32,13 +32,14 @@ Actions to execute if the action times out:
 
 ```yaml
 click:
-  xpath: //*[@id="slow-button"]
+  target: //*[@id="slow-button"]
   timeout: 3000
   on_timeout:
     - log: Click timed out
     - wait:
         duration: 1000
-    - click: //*[@id="slow-button"]
+    - click:
+        target: //*[@id="slow-button"]
 ```
 
 ## Action Chaining
@@ -48,7 +49,7 @@ Error handlers can contain multiple actions:
 ```yaml
 type:
   value: text
-  xpath: //*[@id="input"]
+  target: //*[@id="input"]
   on_error:
     - log: First error handler action
     - log: Second error handler action
