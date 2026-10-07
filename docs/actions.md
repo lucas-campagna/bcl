@@ -34,8 +34,7 @@
 | `load` | Load context from a JSON file |
 | `dialog` | Auto-handle browser dialogs |
 | `download` | Wait for and save a file download |
-| `dialog` | Auto-handle browser dialogs |
-| `download` | Wait for and save a file download |
+| `request` | Make HTTP requests |
 
 ## Action Details
 
@@ -377,3 +376,46 @@ Persist the entire context to a JSON file, or load it back:
 # later, in another flow:
 - load: ./state.json
 ```
+
+### request
+
+Make HTTP requests. Supports all standard methods (GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS). Response body is parsed as JSON and converted to YAML for variable access; if parsing fails, the raw string is stored.
+
+```yaml
+# simple GET request
+- request: https://api.example.com/users
+  to: USERS
+
+# GET with headers and response stored in variable
+- request: https://api.example.com/users
+  headers:
+    Authorization: "Bearer $TOKEN"
+  to: RESPONSE
+
+# POST with body
+- request: https://api.example.com/users
+  method: POST
+  body: '{"name": "test"}'
+  headers:
+    Content-Type: "application/json"
+  to: RESULT
+
+# with custom timeout (milliseconds)
+- request: https://api.example.com/slow
+  timeout: 30000
+  to: SLOW_RESPONSE
+
+# with error handling
+- request: https://api.example.com/maybe-fail
+  on_error:
+    - log: Request failed, continuing...
+```
+
+**Fields:**
+- `url` (required) — the URL to request
+- `method` — HTTP method (default: GET)
+- `headers` — map of header names to values (variables supported)
+- `body` — request body (variables supported)
+- `to` — variable name to store the response
+- `timeout` — request timeout in milliseconds
+- `on_error` — actions to run if the request fails
