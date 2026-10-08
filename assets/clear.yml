@@ -1,0 +1,50 @@
+# flow name
+login:
+  - goto: https://portal.clear.com.br/login
+    wait_until: commit
+    # auto await for the xpath element
+  - type: $USERNAME # from var env
+    target: //*[@id="wl-form--id"]/div/div/div/input
+    secret: true
+    # css: #wl-form--id > div > div > div > input
+  # it's smart enough to verify if value is a css or xpath
+  - click: //*[@id="root"]/div[1]/div/div/arsenal-loader/div[2]/div/div/div[2]/div/div[2]/form/div[2]/button
+    # could be the css #root > div.sc-eqUAAy.cITmkw > div > div > arsenal-loader > div.css-1om0cd4 > div > div > div.MuiStack-root.SomaStack.css-1nz8i8y > div > div.css-1uerw5q > form > div.css-1g2u2wj > button
+    # should be able to recognize
+  - type: $PASSWORD # from var env
+    target: //*[@id="wl-form--pwd"]/div/div/div/input
+    secret: true
+    # css: #wl-form--pwd > div > div > div > input
+  - press: Enter
+    # ask the user to enter a value from stdin, save to variable TOKEN
+  - if: {not: {defined: TOKEN}}
+    then:
+    - ask: Please provide Token
+      to: TOKEN # if already provided in var env, overwrite
+    # since the xpath returns a list of input elements, it means we gonna type each char of $TOKEN (value of type) into each found element
+    # user could also write 'xpath: [el1, el2, ...]', the result would be the same, type each char of the value of $TOKEN into each field
+    # if we have more chars than elements just fill the elements left the remaining intact
+  - type: $TOKEN # from previous step
+    target: /html/body/auth0-mfa-page/arsenal-loader/div/div/div[1]/div/div[2]/div/div[2]/form/div/div[3]/div/div[1]/input
+  - press: Enter
+    # wait for url to be value
+  - wait: {url: https://portal.clear.com.br/minha-conta}
+    timeout: 10000
+
+init:
+  - goto: https://portal.clear.com.br/minha-conta
+  - if: {url: https://portal.clear.com.br/login}
+    then:
+      - call: login
+  - call: minha-conta
+
+minha-conta:
+  - goto: https://trader.clear.com.br/home-broker/new/
+
+get-symbols:
+  - goto: https://trader.clear.com.br/home-broker/new/
+  - read: //*[@id="grid-component-4"]/arsenal-loader/div/div[1]/div[1]/div[2]/div
+
+token-fill-test:
+  - type: '654321'
+    target: /html/body/auth0-mfa-page/arsenal-loader/div/div/div[1]/div/div[2]/div/div[2]/form/div/div[3]/div/div[1]/input

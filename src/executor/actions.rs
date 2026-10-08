@@ -459,11 +459,15 @@ pub async fn run_actions(
                     handle_action_error(ws_url, e, on_error, &None, context, verbose, flows).await?;
                 }
             }
-            Action::Server { base_path, routes } => {
+            Action::Server { base_path, port, ws_url, routes } => {
                 let flows_clone = flows.clone();
                 let routes_clone = routes.clone();
+                let ws_url_clone = ws_url.clone();
                 let verbose = verbose;
-                tokio::spawn(run_server(base_path.clone(), routes_clone, flows_clone, verbose));
+                let server_future = run_server(base_path.clone(), *port, ws_url_clone, routes_clone, flows_clone, verbose);
+                tokio::spawn(async move {
+                    let _ = server_future.await;
+                });
             }
         }
         if verbose {
@@ -1559,14 +1563,16 @@ async fn do_request(
 
 async fn run_server(
     base_path: String,
+    port: u16,
+    ws_url: Option<String>,
     routes: std::collections::HashMap<String, crate::flow::RouteConfig>,
     flows: crate::flow::FlowFile,
     verbose: bool,
 ) -> Result<(), Error> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    let addr = "127.0.0.1:8080";
-    let listener = tokio::net::TcpListener::bind(addr)
+    let addr = format!("127.0.0.1:{}", port);
+    let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .map_err(|e| Error::ActionFailed(format!("Failed to bind to {}: {}", addr, e)))?;
 
@@ -1580,19 +1586,35 @@ async fn run_server(
                 let base_path = base_path.clone();
                 let routes = routes.clone();
                 let flows = flows.clone();
+                let ws_url = ws_url.clone();
                 let verbose = verbose;
 
                 tokio::spawn(async move {
                     let mut buf = [0u8; 8192];
                     let mut request_line = String::new();
+                    let mut headers = Vec::new();
+                    let mut content_length = 0;
 
                     loop {
                         match stream.read(&mut buf).await {
                             Ok(0) => break,
                             Ok(n) => {
                                 let text = String::from_utf8_lossy(&buf[..n]);
-                                if let Some(line) = text.lines().next() {
-                                    request_line = line.to_string();
+                                for line in text.lines() {
+                                    if request_line.is_empty() {
+                                        request_line = line.to_string();
+                                    } else if line.is_empty() {
+                                        break;
+                                    } else {
+                                        headers.push(line.to_string());
+                                        if line.to_lowercase().starts_with("content-length:") {
+                                            if let Ok(len) = line.split(':').nth(1).unwrap_or("0").trim().parse::<usize>() {
+                                                content_length = len;
+                                            }
+                                        }
+                                    }
+                                }
+                                if !request_line.is_empty() && (line_count(&text) > headers.len() as usize || content_length > 0) {
                                     break;
                                 }
                             }
@@ -1611,11 +1633,31 @@ async fn run_server(
                     let method = parts[0].to_string();
                     let path = parts[1].to_string();
 
-                    let route_path = if path.starts_with(&base_path) {
-                        path[base_path.len()..].to_string()
+                    let (path_without_query, query_string) = if let Some(q_pos) = path.find('?') {
+                        (path[..q_pos].to_string(), Some(path[q_pos+1..].to_string()))
                     } else {
-                        path
+                        (path.clone(), None)
                     };
+
+                    let route_path = if path_without_query.starts_with(&base_path) {
+                        path_without_query[base_path.len()..].to_string()
+                    } else {
+                        path_without_query
+                    };
+
+                    let mut body = String::new();
+                    if content_length > 0 {
+                        let mut body_buf = vec![0u8; content_length];
+                        let mut total_read = 0;
+                        while total_read < content_length {
+                            match stream.read(&mut body_buf[total_read..]).await {
+                                Ok(0) => break,
+                                Ok(n) => total_read += n,
+                                Err(_) => break,
+                            }
+                        }
+                        body = String::from_utf8_lossy(&body_buf[..total_read]).to_string();
+                    }
 
                     let route_config = routes.get(&route_path);
                     let actions: Option<Vec<crate::flow::Action>> = match route_config {
@@ -1631,9 +1673,45 @@ async fn run_server(
 
                     let response = if let Some(actions) = actions {
                         let mut ctx = crate::flow::Context::new();
-                        ctx.set_yaml("PARAMS", serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
 
-                        let result = run_server_actions(actions, &mut ctx, verbose, &flows).await;
+                        let mut params_map = serde_yaml::Mapping::new();
+
+                        if let Some(qs) = query_string {
+                            let mut query_map = serde_yaml::Mapping::new();
+                            for pair in qs.split('&') {
+                                let parts: Vec<&str> = pair.splitn(2, '=').collect();
+                                if parts.len() == 2 {
+                                    query_map.insert(
+                                        serde_yaml::Value::String(parts[0].to_string()),
+                                        serde_yaml::Value::String(parts[1].to_string()),
+                                    );
+                                }
+                            }
+                            params_map.insert(serde_yaml::Value::String("query".to_string()), serde_yaml::Value::Mapping(query_map));
+                        }
+
+                        if !body.is_empty() {
+                            if body.contains('=') {
+                                let mut body_map = serde_yaml::Mapping::new();
+                                for pair in body.split('&') {
+                                    let parts: Vec<&str> = pair.splitn(2, '=').collect();
+                                    if parts.len() == 2 {
+                                        body_map.insert(
+                                            serde_yaml::Value::String(parts[0].to_string()),
+                                            serde_yaml::Value::String(parts[1].to_string()),
+                                        );
+                                    }
+                                }
+                                params_map.insert(serde_yaml::Value::String("body".to_string()), serde_yaml::Value::Mapping(body_map));
+                            } else {
+                                params_map.insert(serde_yaml::Value::String("body".to_string()), serde_yaml::Value::String(body.clone()));
+                            }
+                        }
+
+                        ctx.set_yaml("PARAMS", serde_yaml::Value::Mapping(params_map));
+
+                        let ws_url_for_actions = ws_url.clone().unwrap_or_else(|| "ws://localhost:9222".to_string());
+                        let result = run_server_actions(actions, &mut ctx, verbose, &flows, &ws_url_for_actions).await;
                         match result {
                             Ok(response_body) => {
                                 format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
@@ -1663,11 +1741,33 @@ async fn run_server(
     }
 }
 
+fn line_count(text: &str) -> usize {
+    text.lines().count()
+}
+
+fn handle_browser_action(
+    ws_url: String,
+    action: crate::flow::Action,
+    context: crate::flow::Context,
+    verbose: bool,
+    flows: crate::flow::FlowFile,
+) {
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let actions = vec![action];
+            let mut ctx = context;
+            run_actions(&ws_url, &actions, &mut ctx, verbose, &flows).await.ok();
+        });
+    });
+}
+
 async fn run_server_actions(
     actions: Vec<crate::flow::Action>,
     context: &mut crate::flow::Context,
     verbose: bool,
     flows: &crate::flow::FlowFile,
+    ws_url: &str,
 ) -> Result<String, Error> {
     let mut response_body = String::new();
 
@@ -1714,7 +1814,7 @@ async fn run_server_actions(
                     eprintln!("[SERVER] if: condition={}", condition_met);
                 }
                 let branch = if condition_met { then } else { else_ };
-                let result = Box::pin(run_server_actions(branch, context, verbose, flows)).await?;
+                let result = Box::pin(run_server_actions(branch, context, verbose, flows, ws_url)).await?;
                 if !result.is_empty() && response_body.is_empty() {
                     response_body = result;
                 }
@@ -1722,10 +1822,32 @@ async fn run_server_actions(
             crate::flow::Action::Fail { message } => {
                 return Err(Error::ActionFailed(message.clone()));
             }
+            crate::flow::Action::Call { flow, params } => {
+                if verbose {
+                    eprintln!("[SERVER] call: flow={}, params={:?}", flow, params);
+                }
+                let sub_actions = flows
+                    .get(&flow)
+                    .ok_or_else(|| Error::ActionFailed(format!("Flow '{}' not found", flow)))?;
+                let mut sub_context = context.clone();
+                for (key, value) in params {
+                    let value_str = serde_yaml::to_string(&value).unwrap_or_default();
+                    sub_context.set(key, value_str.trim());
+                }
+                let result = Box::pin(run_server_actions(sub_actions.clone(), &mut sub_context, verbose, flows, ws_url)).await?;
+                if !result.is_empty() && response_body.is_empty() {
+                    response_body = result;
+                }
+            }
             _ => {
                 if verbose {
-                    eprintln!("[SERVER] unsupported action in server context: {:?}", action);
+                    eprintln!("[SERVER] executing browser action: {:?}", action);
                 }
+                let ws_url = ws_url.to_string();
+                let action = action.clone();
+                let context = context.clone();
+                let flows = flows.clone();
+                handle_browser_action(ws_url, action, context, verbose, flows);
             }
         }
     }

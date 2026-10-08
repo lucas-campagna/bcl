@@ -240,6 +240,8 @@ pub enum Action {
     },
     Server {
         base_path: String,
+        #[serde(default = "default_port")] port: u16,
+        #[serde(default)] ws_url: Option<String>,
         routes: std::collections::HashMap<String, RouteConfig>,
     },
 }
@@ -256,6 +258,7 @@ pub struct RouteConfig {
 
 fn default_true() -> bool { true }
 fn default_get() -> String { "GET".to_string() }
+fn default_port() -> u16 { 8080 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]

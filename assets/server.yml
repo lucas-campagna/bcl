@@ -1,0 +1,25 @@
+
+test:
+    # server command start a local server
+  - server:
+      /health: # map of routes to execute actions default to GET method
+        - server is working # returns last string
+      /prod:
+        GET:
+          - if: 
+              var: params.log_scale
+              value: "true"
+            then:
+              - $params.a * $params.b # return test is working
+          # we could call some actions here before exit
+          - $params.a + $params.b
+        POST:
+          - if: 
+              var: params.log_scale
+              value: "true"
+            then:
+              - return: {result: $params.a * $params.b } # return command is used to return from server request
+          # could call some actions here before exit
+          - return:
+              result: $params.a + $params.b
+    base_path: /api

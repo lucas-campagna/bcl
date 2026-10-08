@@ -885,10 +885,18 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
         }
         "server" => {
             let mut base_path = "/".to_string();
+            let mut port: u16 = 8080;
+            let mut ws_url = None;
             let mut routes = std::collections::HashMap::new();
             for (key, val) in action_keys.iter().zip(action_values.iter()).skip(1) {
                 match key.as_str() {
                     "base_path" => base_path = parse_string_value(val).unwrap_or_else(|_| "/".to_string()),
+                    "port" => {
+                        if let serde_yaml::Value::Number(n) = val {
+                            port = n.as_u64().unwrap_or(8080) as u16;
+                        }
+                    }
+                    "ws_url" => ws_url = parse_string_value(val).ok(),
                     _ => {}
                 }
             }
@@ -935,7 +943,7 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
                     routes.insert(key.clone(), route_config);
                 }
             }
-            Ok(Some(Action::Server { base_path, routes }))
+            Ok(Some(Action::Server { base_path, port, ws_url, routes }))
         }
         _ => Err(Error::InvalidAction(format!("Unknown action: {}", first_key))),
     }
