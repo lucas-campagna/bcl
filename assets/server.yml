@@ -16,8 +16,9 @@ health:
 
 prod-get:
   - if:
-      var: REQUEST.QUERY_PARAMS.log_scale
-      value: "true"
+      equals:
+        var: REQUEST.QUERY_PARAMS.log_scale
+        value: "true"
     then:
       - define: RESPONSE.body
         value: {result: $REQUEST.BODY.a * $REQUEST.BODY.b}
@@ -30,8 +31,9 @@ prod-post:
   - define: RESPONSE.status
     value: 200
   - if:
-      var: REQUEST.QUERY_PARAMS.log_scale
-      value: "true"
+      equals:
+        var: REQUEST.QUERY_PARAMS.log_scale
+        value: "true"
     then:
       - define: RESPONSE.body
         value: {result: $REQUEST.BODY.a * $REQUEST.BODY.b}
