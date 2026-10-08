@@ -903,35 +903,21 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
             for (key, val) in action_keys.iter().zip(action_values.iter()) {
                 if key.starts_with('/') {
                     let mut route_config = crate::flow::RouteConfig {
-                        default: Vec::new(),
+                        default: None,
                         get: None,
                         post: None,
                     };
                     match val {
-                        serde_yaml::Value::Sequence(actions_seq) => {
-                            for item in actions_seq {
-                                if let serde_yaml::Value::Mapping(item_map) = item {
-                                    if let Some(action) = parse_action_from_map(item_map)? {
-                                        route_config.default.push(action);
-                                    }
-                                }
-                            }
+                        serde_yaml::Value::String(flow_name) => {
+                            route_config.default = Some(flow_name.clone());
                         }
                         serde_yaml::Value::Mapping(methods_map) => {
                             for (method_key, method_val) in methods_map {
                                 if let serde_yaml::Value::String(method_name) = method_key {
-                                    if let serde_yaml::Value::Sequence(actions_seq) = method_val {
-                                        let mut actions = Vec::new();
-                                        for item in actions_seq {
-                                            if let serde_yaml::Value::Mapping(item_map) = item {
-                                                if let Some(action) = parse_action_from_map(item_map)? {
-                                                    actions.push(action);
-                                                }
-                                            }
-                                        }
+                                    if let serde_yaml::Value::String(flow_name) = method_val {
                                         match method_name.to_uppercase().as_str() {
-                                            "GET" => route_config.get = Some(actions),
-                                            "POST" => route_config.post = Some(actions),
+                                            "GET" => route_config.get = Some(flow_name.clone()),
+                                            "POST" => route_config.post = Some(flow_name.clone()),
                                             _ => {}
                                         }
                                     }

@@ -249,11 +249,11 @@ pub enum Action {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RouteConfig {
     #[serde(default)]
-    pub default: Vec<Action>,
+    pub default: Option<String>,
     #[serde(default)]
-    pub get: Option<Vec<Action>>,
+    pub get: Option<String>,
     #[serde(default)]
-    pub post: Option<Vec<Action>>,
+    pub post: Option<String>,
 }
 
 fn default_true() -> bool { true }
@@ -324,7 +324,109 @@ impl Context {
     }
 
     pub fn set_yaml(&mut self, key: impl Into<String>, value: serde_yaml::Value) {
-        self.vars.insert(key.into(), value);
+        let key = key.into();
+
+        if key.contains('.') || key.contains('[') {
+            self.set_nested(&key, value);
+        } else {
+            self.vars.insert(key, value);
+        }
+    }
+
+    fn set_nested(&mut self, path: &str, value: serde_yaml::Value) {
+        let path_regex = regex::Regex::new(r"\.([a-zA-Z_][a-zA-Z0-9_]*)|\[([0-9]+)\]").unwrap();
+
+        let base_var_regex = regex::Regex::new(r"^([A-Z_][A-Z0-9_]*)").unwrap();
+        let base_name = match base_var_regex.captures(path).and_then(|c| c.get(1)).map(|m| m.as_str()) {
+            Some(name) => name,
+            None => return,
+        };
+
+        let caps: Vec<_> = path_regex.captures_iter(path).collect();
+        if caps.is_empty() {
+            return;
+        }
+
+        let mut current = self.vars.get(base_name).cloned().unwrap_or(serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+
+        for (i, cap) in caps.iter().enumerate() {
+            if i == caps.len() - 1 {
+                break;
+            }
+
+            if let Some(key) = cap.get(1) {
+                let key_str = key.as_str();
+                match &mut current {
+                    serde_yaml::Value::Mapping(map) => {
+                        current = map.remove(&serde_yaml::Value::String(key_str.to_string()))
+                            .unwrap_or(serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+                    }
+                    _ => {
+                        current = serde_yaml::Value::Mapping(serde_yaml::Mapping::new());
+                    }
+                }
+            } else if let Some(idx) = cap.get(2) {
+                if let Ok(index) = idx.as_str().parse::<usize>() {
+                    match &mut current {
+                        serde_yaml::Value::Sequence(seq) => {
+                            if index < seq.len() {
+                                current = seq.remove(index);
+                            } else {
+                                current = serde_yaml::Value::Mapping(serde_yaml::Mapping::new());
+                            }
+                        }
+                        _ => {
+                            current = serde_yaml::Value::Sequence(vec![]);
+                        }
+                    }
+                } else {
+                    break;
+                }
+            }
+        }
+
+        if let Some(cap) = caps.last() {
+            if let Some(key) = cap.get(1) {
+                let key_str = key.as_str();
+                if let serde_yaml::Value::Mapping(map) = &mut current {
+                    let existing = map.remove(&serde_yaml::Value::String(key_str.to_string()));
+                    let merged = Self::merge_yaml(existing.as_ref(), &value);
+                    map.insert(serde_yaml::Value::String(key_str.to_string()), merged);
+                }
+            } else if let Some(idx) = cap.get(2) {
+                if let Ok(index) = idx.as_str().parse::<usize>() {
+                    if let serde_yaml::Value::Sequence(seq) = &mut current {
+                        if index < seq.len() {
+                            let existing = Some(seq[index].clone());
+                            let merged = Self::merge_yaml(existing.as_ref(), &value);
+                            seq[index] = merged;
+                        } else if index == seq.len() {
+                            seq.push(value);
+                        }
+                    }
+                }
+            }
+        }
+
+        self.vars.insert(base_name.to_string(), current);
+    }
+
+    fn merge_yaml(existing: Option<&serde_yaml::Value>, new: &serde_yaml::Value) -> serde_yaml::Value {
+        match (existing, new) {
+            (Some(serde_yaml::Value::Mapping(existing_map)), serde_yaml::Value::Mapping(new_map)) => {
+                let mut merged = existing_map.clone();
+                for (k, v) in new_map {
+                    let merged_v = if let Some(existing_v) = existing_map.get(k) {
+                        Self::merge_yaml(Some(existing_v), v)
+                    } else {
+                        v.clone()
+                    };
+                    merged.insert(k.clone(), merged_v);
+                }
+                serde_yaml::Value::Mapping(merged)
+            }
+            _ => new.clone(),
+        }
     }
 
     pub fn get(&self, key: &str) -> Option<&serde_yaml::Value> {

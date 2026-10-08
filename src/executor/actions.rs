@@ -1660,23 +1660,37 @@ async fn run_server(
                     }
 
                     let route_config = routes.get(&route_path);
-                    let actions: Option<Vec<crate::flow::Action>> = match route_config {
+                    let flow_name: Option<String> = match route_config {
                         Some(cfg) => {
                             match method.as_str() {
-                                "GET" => cfg.get.clone().or(Some(cfg.default.clone())),
-                                "POST" => cfg.post.clone(),
-                                _ => None,
+                                "GET" => cfg.get.clone().or(cfg.default.clone()),
+                                "POST" => cfg.post.clone().or(cfg.default.clone()),
+                                _ => cfg.default.clone(),
                             }
                         }
                         None => None,
                     };
 
-                    let response = if let Some(actions) = actions {
+                    let response = if let Some(flow_name) = flow_name {
                         let mut ctx = crate::flow::Context::new();
 
-                        let mut params_map = serde_yaml::Mapping::new();
+                        let mut request_map = serde_yaml::Mapping::new();
+                        request_map.insert(serde_yaml::Value::String("METHOD".to_string()), serde_yaml::Value::String(method.clone()));
+                        request_map.insert(serde_yaml::Value::String("PATH".to_string()), serde_yaml::Value::String(route_path.clone()));
+                        request_map.insert(serde_yaml::Value::String("BASE_PATH".to_string()), serde_yaml::Value::String(base_path.clone()));
 
-                        if let Some(qs) = query_string {
+                        let mut headers_map = serde_yaml::Mapping::new();
+                        for header in &headers {
+                            if let Some((key, value)) = header.split_once(':') {
+                                headers_map.insert(
+                                    serde_yaml::Value::String(key.trim().to_string()),
+                                    serde_yaml::Value::String(value.trim().to_string()),
+                                );
+                            }
+                        }
+                        request_map.insert(serde_yaml::Value::String("HEADERS".to_string()), serde_yaml::Value::Mapping(headers_map));
+
+                        if let Some(qs) = &query_string {
                             let mut query_map = serde_yaml::Mapping::new();
                             for pair in qs.split('&') {
                                 let parts: Vec<&str> = pair.splitn(2, '=').collect();
@@ -1687,7 +1701,7 @@ async fn run_server(
                                     );
                                 }
                             }
-                            params_map.insert(serde_yaml::Value::String("query".to_string()), serde_yaml::Value::Mapping(query_map));
+                            request_map.insert(serde_yaml::Value::String("QUERY_PARAMS".to_string()), serde_yaml::Value::Mapping(query_map));
                         }
 
                         if !body.is_empty() {
@@ -1702,20 +1716,27 @@ async fn run_server(
                                         );
                                     }
                                 }
-                                params_map.insert(serde_yaml::Value::String("body".to_string()), serde_yaml::Value::Mapping(body_map));
+                                request_map.insert(serde_yaml::Value::String("BODY".to_string()), serde_yaml::Value::Mapping(body_map));
                             } else {
-                                params_map.insert(serde_yaml::Value::String("body".to_string()), serde_yaml::Value::String(body.clone()));
+                                request_map.insert(serde_yaml::Value::String("BODY".to_string()), serde_yaml::Value::String(body.clone()));
                             }
                         }
 
-                        ctx.set_yaml("PARAMS", serde_yaml::Value::Mapping(params_map));
+                        ctx.set_yaml("REQUEST", serde_yaml::Value::Mapping(request_map));
 
                         let ws_url_for_actions = ws_url.clone().unwrap_or_else(|| "ws://localhost:9222".to_string());
-                        let result = run_server_actions(actions, &mut ctx, verbose, &flows, &ws_url_for_actions).await;
+                        let result = execute_server_flow(&flow_name, &mut ctx, verbose, &flows, &ws_url_for_actions).await;
+
                         match result {
-                            Ok(response_body) => {
-                                format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                                    response_body.len(), response_body)
+                            Ok(_) => {
+                                let (status, response_body, response_headers) = build_response_from_context(&ctx);
+                                let headers_str = if response_headers.is_empty() {
+                                    "Content-Type: application/json\r\n".to_string()
+                                } else {
+                                    response_headers
+                                };
+                                format!("HTTP/1.1 {} OK\r\nContent-Type: application/json\r\n{}\r\n{}",
+                                    status, headers_str, response_body)
                             }
                             Err(e) => {
                                 let error_body = serde_json::json!({"error": e.to_string()}).to_string();
@@ -1743,6 +1764,51 @@ async fn run_server(
 
 fn line_count(text: &str) -> usize {
     text.lines().count()
+}
+
+async fn execute_server_flow(
+    flow_name: &str,
+    context: &mut crate::flow::Context,
+    verbose: bool,
+    flows: &crate::flow::FlowFile,
+    ws_url: &str,
+) -> Result<(), Error> {
+    let sub_actions = flows
+        .get(flow_name)
+        .ok_or_else(|| Error::ActionFailed(format!("Flow '{}' not found", flow_name)))?;
+
+    run_server_actions(sub_actions.clone(), context, verbose, flows, ws_url).await?;
+    Ok(())
+}
+
+fn build_response_from_context(context: &crate::flow::Context) -> (u16, String, String) {
+    let mut status = 200;
+    let mut body = "{}".to_string();
+    let mut headers = String::new();
+
+    if let Some(response_val) = context.get("RESPONSE") {
+        if let Some(status_val) = response_val.get("status") {
+            if let Some(n) = status_val.as_i64() {
+                status = n as u16;
+            }
+        }
+        if let Some(body_val) = response_val.get("body") {
+            body = serde_yaml::to_string(body_val).unwrap_or_else(|_| "{}".to_string());
+        }
+        if let Some(headers_val) = response_val.get("headers") {
+            if let serde_yaml::Value::Mapping(map) = headers_val {
+                let mut header_parts = Vec::new();
+                for (k, v) in map {
+                    if let (serde_yaml::Value::String(key), serde_yaml::Value::String(value)) = (k, v) {
+                        header_parts.push(format!("{}: {}\r\n", key, value));
+                    }
+                }
+                headers = header_parts.join("");
+            }
+        }
+    }
+
+    (status, body, headers)
 }
 
 fn handle_browser_action(
