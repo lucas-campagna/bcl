@@ -883,6 +883,60 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
             let path = parse_string_value(first_val)?;
             Ok(Some(Action::Load { path }))
         }
+        "server" => {
+            let mut base_path = "/".to_string();
+            let mut routes = std::collections::HashMap::new();
+            for (key, val) in action_keys.iter().zip(action_values.iter()).skip(1) {
+                match key.as_str() {
+                    "base_path" => base_path = parse_string_value(val).unwrap_or_else(|_| "/".to_string()),
+                    _ => {}
+                }
+            }
+            for (key, val) in action_keys.iter().zip(action_values.iter()) {
+                if key.starts_with('/') {
+                    let mut route_config = crate::flow::RouteConfig {
+                        default: Vec::new(),
+                        get: None,
+                        post: None,
+                    };
+                    match val {
+                        serde_yaml::Value::Sequence(actions_seq) => {
+                            for item in actions_seq {
+                                if let serde_yaml::Value::Mapping(item_map) = item {
+                                    if let Some(action) = parse_action_from_map(item_map)? {
+                                        route_config.default.push(action);
+                                    }
+                                }
+                            }
+                        }
+                        serde_yaml::Value::Mapping(methods_map) => {
+                            for (method_key, method_val) in methods_map {
+                                if let serde_yaml::Value::String(method_name) = method_key {
+                                    if let serde_yaml::Value::Sequence(actions_seq) = method_val {
+                                        let mut actions = Vec::new();
+                                        for item in actions_seq {
+                                            if let serde_yaml::Value::Mapping(item_map) = item {
+                                                if let Some(action) = parse_action_from_map(item_map)? {
+                                                    actions.push(action);
+                                                }
+                                            }
+                                        }
+                                        match method_name.to_uppercase().as_str() {
+                                            "GET" => route_config.get = Some(actions),
+                                            "POST" => route_config.post = Some(actions),
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                    routes.insert(key.clone(), route_config);
+                }
+            }
+            Ok(Some(Action::Server { base_path, routes }))
+        }
         _ => Err(Error::InvalidAction(format!("Unknown action: {}", first_key))),
     }
 }

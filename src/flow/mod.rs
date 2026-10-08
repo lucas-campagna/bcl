@@ -238,6 +238,20 @@ pub enum Action {
         #[serde(default)] timeout: Option<u64>,
         #[serde(default)] on_error: Option<Vec<Action>>,
     },
+    Server {
+        base_path: String,
+        routes: std::collections::HashMap<String, RouteConfig>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RouteConfig {
+    #[serde(default)]
+    pub default: Vec<Action>,
+    #[serde(default)]
+    pub get: Option<Vec<Action>>,
+    #[serde(default)]
+    pub post: Option<Vec<Action>>,
 }
 
 fn default_true() -> bool { true }

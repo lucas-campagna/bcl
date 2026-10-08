@@ -459,6 +459,12 @@ pub async fn run_actions(
                     handle_action_error(ws_url, e, on_error, &None, context, verbose, flows).await?;
                 }
             }
+            Action::Server { base_path, routes } => {
+                let flows_clone = flows.clone();
+                let routes_clone = routes.clone();
+                let verbose = verbose;
+                tokio::spawn(run_server(base_path.clone(), routes_clone, flows_clone, verbose));
+            }
         }
         if verbose {
             eprintln!("[EXEC] done: {:?}", start.elapsed());
@@ -1549,4 +1555,200 @@ async fn do_request(
     }
 
     Ok(())
+}
+
+async fn run_server(
+    base_path: String,
+    routes: std::collections::HashMap<String, crate::flow::RouteConfig>,
+    flows: crate::flow::FlowFile,
+    verbose: bool,
+) -> Result<(), Error> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let addr = "127.0.0.1:8080";
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .map_err(|e| Error::ActionFailed(format!("Failed to bind to {}: {}", addr, e)))?;
+
+    if verbose {
+        eprintln!("[SERVER] listening on {}", addr);
+    }
+
+    loop {
+        match listener.accept().await {
+            Ok((mut stream, _)) => {
+                let base_path = base_path.clone();
+                let routes = routes.clone();
+                let flows = flows.clone();
+                let verbose = verbose;
+
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 8192];
+                    let mut request_line = String::new();
+
+                    loop {
+                        match stream.read(&mut buf).await {
+                            Ok(0) => break,
+                            Ok(n) => {
+                                let text = String::from_utf8_lossy(&buf[..n]);
+                                if let Some(line) = text.lines().next() {
+                                    request_line = line.to_string();
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("[SERVER] read error: {}", e);
+                                return;
+                            }
+                        }
+                    }
+
+                    let parts: Vec<&str> = request_line.split_whitespace().collect();
+                    if parts.len() < 2 {
+                        return;
+                    }
+
+                    let method = parts[0].to_string();
+                    let path = parts[1].to_string();
+
+                    let route_path = if path.starts_with(&base_path) {
+                        path[base_path.len()..].to_string()
+                    } else {
+                        path
+                    };
+
+                    let route_config = routes.get(&route_path);
+                    let actions: Option<Vec<crate::flow::Action>> = match route_config {
+                        Some(cfg) => {
+                            match method.as_str() {
+                                "GET" => cfg.get.clone().or(Some(cfg.default.clone())),
+                                "POST" => cfg.post.clone(),
+                                _ => None,
+                            }
+                        }
+                        None => None,
+                    };
+
+                    let response = if let Some(actions) = actions {
+                        let mut ctx = crate::flow::Context::new();
+                        ctx.set_yaml("PARAMS", serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+
+                        let result = run_server_actions(actions, &mut ctx, verbose, &flows).await;
+                        match result {
+                            Ok(response_body) => {
+                                format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                                    response_body.len(), response_body)
+                            }
+                            Err(e) => {
+                                let error_body = serde_json::json!({"error": e.to_string()}).to_string();
+                                format!("HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                                    error_body.len(), error_body)
+                            }
+                        }
+                    } else {
+                        let error_body = serde_json::json!({"error": "not found"}).to_string();
+                        format!("HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                            error_body.len(), error_body)
+                    };
+
+                    if let Err(e) = stream.write_all(response.as_bytes()).await {
+                        eprintln!("[SERVER] write error: {}", e);
+                    }
+                });
+            }
+            Err(e) => {
+                eprintln!("[SERVER] accept error: {}", e);
+            }
+        }
+    }
+}
+
+async fn run_server_actions(
+    actions: Vec<crate::flow::Action>,
+    context: &mut crate::flow::Context,
+    verbose: bool,
+    flows: &crate::flow::FlowFile,
+) -> Result<String, Error> {
+    let mut response_body = String::new();
+
+    for action in actions {
+        match action {
+            crate::flow::Action::Log { text } => {
+                let resolved = context.resolve(&text);
+                if verbose {
+                    eprintln!("[SERVER] log: {}", resolved);
+                }
+                println!("{}", resolved);
+            }
+            crate::flow::Action::Return { values } => {
+                if values.len() == 1 {
+                    if let Some((_, value)) = values.iter().next() {
+                        let resolved = context.resolve(&serde_yaml::to_string(&value).unwrap_or_default());
+                        response_body = resolved;
+                    }
+                } else {
+                    let mut map = serde_json::Map::new();
+                    for (key, value) in values {
+                        let resolved = context.resolve(&serde_yaml::to_string(&value).unwrap_or_default());
+                        if let Ok(v) = serde_json::from_str(&resolved) {
+                            map.insert(key.clone(), v);
+                        } else {
+                            map.insert(key.clone(), serde_json::Value::String(resolved));
+                        }
+                    }
+                    response_body = serde_json::to_string(&map).unwrap_or_default();
+                }
+            }
+            crate::flow::Action::Define { var, value, overwrite } => {
+                if overwrite.clone() || !context.is_defined(&var) {
+                    let resolved_value = resolve_yaml_value(&value, context, None);
+                    if verbose {
+                        eprintln!("[SERVER] define: {}={:?}", var, resolved_value);
+                    }
+                    context.set_yaml(var, resolved_value);
+                }
+            }
+            crate::flow::Action::If { condition, then, else_ } => {
+                let condition_met = evaluate_condition_for_server(&condition, context).await;
+                if verbose {
+                    eprintln!("[SERVER] if: condition={}", condition_met);
+                }
+                let branch = if condition_met { then } else { else_ };
+                let result = Box::pin(run_server_actions(branch, context, verbose, flows)).await?;
+                if !result.is_empty() && response_body.is_empty() {
+                    response_body = result;
+                }
+            }
+            crate::flow::Action::Fail { message } => {
+                return Err(Error::ActionFailed(message.clone()));
+            }
+            _ => {
+                if verbose {
+                    eprintln!("[SERVER] unsupported action in server context: {:?}", action);
+                }
+            }
+        }
+    }
+
+    if response_body.is_empty() {
+        response_body = "{}".to_string();
+    }
+
+    Ok(response_body)
+}
+
+async fn evaluate_condition_for_server(
+    condition: &crate::flow::Condition,
+    context: &crate::flow::Context,
+) -> bool {
+    match condition {
+        crate::flow::Condition::Equals { var, value } => {
+            let resolved = context.resolve(&format!("${}", var));
+            resolved == *value
+        }
+        crate::flow::Condition::Defined(var) => {
+            context.is_defined(var)
+        }
+        _ => false,
+    }
 }
