@@ -25,10 +25,11 @@ pub enum Cli {
 
 #[derive(Parser, Debug)]
 pub struct RunArgs {
-    /// Name of the flow to execute
-    pub flow_name: String,
     /// Path to the YAML file containing the flow definition (use - for stdin)
     pub path: PathBuf,
+    /// Target to execute
+    #[arg(short, long, default_value = "main")]
+    pub target: String,
     /// Output format: simple, pretty, json
     #[arg(short, long, default_value = "simple")]
     pub output: OutputFormat,
@@ -106,7 +107,7 @@ async fn run_flow(args: &RunArgs) -> anyhow::Result<()> {
         } else {
             format!("{:?}", args.path)
         };
-        eprintln!("Loading flow '{}' from {}", args.flow_name, source);
+        eprintln!("Loading target '{}' from {}", args.target, source);
         eprintln!("Connecting to Playwright at: {}", get_browser_url());
     }
 
@@ -126,23 +127,23 @@ async fn run_flow(args: &RunArgs) -> anyhow::Result<()> {
         })?
     };
 
-    let actions = flow_file.get(&args.flow_name).ok_or_else(|| {
+    let actions = flow_file.get(&args.target).ok_or_else(|| {
         if args.verbose {
-            eprintln!("Flow '{}' not found in {:?}", args.flow_name, args.path);
+            eprintln!("Target '{}' not found in {:?}", args.target, args.path);
             eprintln!("Available flows: {:?}", flow_file.flows.keys().collect::<Vec<_>>());
         }
-        anyhow::anyhow!("Flow '{}' not found", args.flow_name)
+        anyhow::anyhow!("Target '{}' not found", args.target)
     })?;
 
     if args.verbose {
-        eprintln!("Found flow '{}' with {} actions", args.flow_name, actions.len());
+        eprintln!("Found target '{}' with {} actions", args.target, actions.len());
     }
 
     let mut context = Context::from_env();
     apply_vars(&mut context, &args.vars);
 
     if args.dry_run {
-        println!("[DRY RUN] Flow: {}", args.flow_name);
+        println!("[DRY RUN] Target: {}", args.target);
         println!("[DRY RUN] Actions ({} total):", actions.len());
         for (i, action) in actions.iter().enumerate() {
             println!("[DRY RUN]   {}. {:?}", i + 1, action);
@@ -155,7 +156,7 @@ async fn run_flow(args: &RunArgs) -> anyhow::Result<()> {
     }
 
     if args.verbose {
-        eprintln!("Executing flow '{}'...", args.flow_name);
+        eprintln!("Executing target '{}'...", args.target);
     }
 
     let runtime = FlowRuntime::connect(&get_browser_url()).await;
@@ -170,7 +171,7 @@ async fn run_flow(args: &RunArgs) -> anyhow::Result<()> {
                         OutputFormat::Json => {
                             let json = JsonOutput {
                                 success: true,
-                                flow_name: args.flow_name.clone(),
+                                flow_name: args.target.clone(),
                                 actions_executed: actions.len(),
                                 error: None,
                             };
@@ -178,7 +179,7 @@ async fn run_flow(args: &RunArgs) -> anyhow::Result<()> {
                         }
                         OutputFormat::Pretty | OutputFormat::Simple => {
                             if args.verbose {
-                                println!("Flow '{}' completed successfully ({} actions)", args.flow_name, actions.len());
+                                println!("Target '{}' completed successfully ({} actions)", args.target, actions.len());
                             } else {
                                 println!("OK");
                             }
@@ -365,7 +366,7 @@ EXTRA_ARGS=()
 [[ "$VERBOSE" == "true" ]] && EXTRA_ARGS+=(--verbose)
 [[ "$DRY_RUN" == "true" ]] && EXTRA_ARGS+=(--dry-run)
 
-exec bcl run "$FLOW_NAME" - "${{EXTRA_ARGS[@]}}" <<< "$YAML_CONTENT"
+exec bcl run -t "$FLOW_NAME" - "${{EXTRA_ARGS[@]}}" <<< "$YAML_CONTENT"
 "#, yaml_path, flows.join(", "), flows_list, flows[0], flows[0], encoded_yaml, flows_pattern);
 
     let output_path = std::path::Path::new(&output_name);
@@ -402,5 +403,37 @@ fn main() {
     if let Err(e) = result {
         eprintln!("Error: {}", e);
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cli, RunArgs};
+    use clap::Parser;
+    use std::path::PathBuf;
+
+    #[test]
+    fn run_defaults_to_main_target_and_accepts_path_positionally() {
+        let cli = Cli::try_parse_from(["bcl", "run", "script.yml"]).unwrap();
+
+        match cli {
+            Cli::Run(args) => {
+                assert_eq!(args.path, PathBuf::from("script.yml"));
+                assert_eq!(args.target, "main");
+            }
+            _ => panic!("Expected run command"),
+        }
+    }
+
+    #[test]
+    fn run_accepts_short_and_long_target_options() {
+        for option in ["-t", "--target"] {
+            let cli = Cli::try_parse_from(["bcl", "run", "script.yml", option, "login"]).unwrap();
+
+            match cli {
+                Cli::Run(RunArgs { target, .. }) => assert_eq!(target, "login"),
+                _ => panic!("Expected run command"),
+            }
+        }
     }
 }

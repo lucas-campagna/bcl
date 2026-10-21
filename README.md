@@ -8,29 +8,33 @@ A Rust-based browser automation tool that executes flow definitions written in Y
 # Build
 cargo build --release
 
-# Run a flow
-bcl run login assets/brokers/clear.yml
+# Run the default `main` target
+bcl run path/to/script.yml
+
+# Run a different target
+bcl run assets/clear.yml --target login
 
 # Dry-run (no browser)
-bcl run login assets/brokers/clear.yml --dry-run
+bcl run assets/clear.yml -t login --dry-run
 
 # Validate a flow file
-bcl validate assets/brokers/clear.yml
+bcl validate assets/clear.yml
 
 # List flows in a file
-bcl list assets/brokers/clear.yml
+bcl list assets/clear.yml
 ```
 
 ## CLI Usage
 
 ```bash
-bcl run <flow_name> <path_to_yaml> [options]
+bcl run <path_to_yaml> [options]
 bcl validate <path_to_yaml>
 bcl list <path_to_yaml>
 ```
 
 ### Run Options
 
+- `-t, --target <name>` - Target to execute (default: `main`)
 - `-o, --output <format>` - Output format: `simple`, `pretty`, `json` (default: simple)
 - `-v, --verbose` - Show debug info and full error traces
 - `--var KEY=VALUE` - Override or set context variables (repeatable)
