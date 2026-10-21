@@ -1,42 +1,45 @@
 
-test:
+server:
     # server command start a local server
   - server:
       /health: health
       /prod:
-        GET: prod-get
-        POST: prod-post
+        GET: prod
+        POST: prod
+      /go: google
     base_path: /api
+    port: 9999
 
 
 health:
-  - define: RESPONSE.body
+  - define: response.body
     value: server is working
 
 
-prod-get:
-  - if:
-      equals:
-        var: REQUEST.QUERY_PARAMS.log_scale
-        value: "true"
-    then:
-      - define: RESPONSE.body
-        value: {result: $REQUEST.BODY.a * $REQUEST.BODY.b}
-    else:
-      - define: RESPONSE.body
-        value: {result: $REQUEST.BODY.a + $REQUEST.BODY.b}
+prod:
+  - define: response.body
+    value:
+      a: $request.body.a
+      b: $request.body.b
+      sum: $request.body.a + $request.body.b
 
+google:
+  - goto: https://google.com.br
+  - define: response.body
+    value: opened
 
-prod-post:
-  - define: RESPONSE.status
-    value: 200
-  - if:
-      equals:
-        var: REQUEST.QUERY_PARAMS.log_scale
-        value: "true"
-    then:
-      - define: RESPONSE.body
-        value: {result: $REQUEST.BODY.a * $REQUEST.BODY.b}
-    else:
-      - define: RESPONSE.body
-        value: {result: $REQUEST.BODY.a + $REQUEST.BODY.b}
+# creating but not navigating to https://google.com.br
+test-tab:
+  - goto: https://google.com.br
+    tab: new
+
+# not focusing on tab 1 to apply goto on it
+test-tab-2:
+  - tab: 1
+  - goto: https://example.com
+
+# not focusing on tab 2 to apply goto on it
+test-tab-3:
+  - tab: 2
+  - goto: https://google.com
+  - goto: https://youtube.com

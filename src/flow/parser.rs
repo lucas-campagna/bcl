@@ -1,5 +1,5 @@
 use crate::error::Error;
-use crate::flow::{Action, Condition, FlowFile};
+use crate::flow::{Action, Condition, FlowFile, TabTarget};
 use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
@@ -200,13 +200,26 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
         "goto" => {
             let url = parse_string_value(first_val)?;
             let mut wait_until = None;
+            let mut tab = None;
             for (key, val) in action_keys.iter().zip(action_values.iter()).skip(1) {
                 match key.as_str() {
                     "wait_until" => wait_until = parse_string_value(val).ok(),
+                    "tab" => tab = parse_tab_target(val).ok(),
                     _ => {}
                 }
             }
-            Ok(Some(Action::Goto { url, wait_until }))
+            Ok(Some(Action::Goto { url, wait_until, tab }))
+        }
+        "tab" => {
+            let index = parse_usize_value(first_val)?;
+            let mut close = false;
+            for (key, val) in action_keys.iter().zip(action_values.iter()).skip(1) {
+                match key.as_str() {
+                    "close" => close = val.as_bool().unwrap_or(false),
+                    _ => {}
+                }
+            }
+            Ok(Some(Action::Tab { index, close }))
         }
         "type" => {
             let value = parse_string_value(first_val)?;
@@ -888,8 +901,15 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
             let mut port: u16 = 8080;
             let mut ws_url = None;
             let mut routes = std::collections::HashMap::new();
-            for (key, val) in action_keys.iter().zip(action_values.iter()).skip(1) {
+            let mut server_routes_map: Option<&serde_yaml::Mapping> = None;
+
+            for (key, val) in action_keys.iter().zip(action_values.iter()) {
                 match key.as_str() {
+                    "server" => {
+                        if let serde_yaml::Value::Mapping(m) = val {
+                            server_routes_map = Some(m);
+                        }
+                    }
                     "base_path" => base_path = parse_string_value(val).unwrap_or_else(|_| "/".to_string()),
                     "port" => {
                         if let serde_yaml::Value::Number(n) = val {
@@ -900,33 +920,38 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
                     _ => {}
                 }
             }
-            for (key, val) in action_keys.iter().zip(action_values.iter()) {
-                if key.starts_with('/') {
-                    let mut route_config = crate::flow::RouteConfig {
-                        default: None,
-                        get: None,
-                        post: None,
-                    };
-                    match val {
-                        serde_yaml::Value::String(flow_name) => {
-                            route_config.default = Some(flow_name.clone());
-                        }
-                        serde_yaml::Value::Mapping(methods_map) => {
-                            for (method_key, method_val) in methods_map {
-                                if let serde_yaml::Value::String(method_name) = method_key {
-                                    if let serde_yaml::Value::String(flow_name) = method_val {
-                                        match method_name.to_uppercase().as_str() {
-                                            "GET" => route_config.get = Some(flow_name.clone()),
-                                            "POST" => route_config.post = Some(flow_name.clone()),
-                                            _ => {}
+
+            if let Some(routes_map) = server_routes_map {
+                for (key, val) in routes_map {
+                    if let serde_yaml::Value::String(key_str) = key {
+                        if key_str.starts_with('/') {
+                            let mut route_config = crate::flow::RouteConfig {
+                                default: None,
+                                get: None,
+                                post: None,
+                            };
+                            match val {
+                                serde_yaml::Value::String(flow_name) => {
+                                    route_config.default = Some(flow_name.clone());
+                                }
+                                serde_yaml::Value::Mapping(methods_map) => {
+                                    for (method_key, method_val) in methods_map {
+                                        if let serde_yaml::Value::String(method_name) = method_key {
+                                            if let serde_yaml::Value::String(flow_name) = method_val {
+                                                match method_name.to_uppercase().as_str() {
+                                                    "GET" => route_config.get = Some(flow_name.clone()),
+                                                    "POST" => route_config.post = Some(flow_name.clone()),
+                                                    _ => {}
+                                                }
+                                            }
                                         }
                                     }
                                 }
+                                _ => {}
                             }
+                            routes.insert(key_str.clone(), route_config);
                         }
-                        _ => {}
                     }
-                    routes.insert(key.clone(), route_config);
                 }
             }
             Ok(Some(Action::Server { base_path, port, ws_url, routes }))
@@ -995,6 +1020,35 @@ fn parse_selector_path_value(value: &serde_yaml::Value) -> Option<crate::flow::S
     }
 }
 
+fn parse_tab_target(value: &serde_yaml::Value) -> Result<TabTarget, Error> {
+    match value {
+        serde_yaml::Value::String(s) => {
+            if s == "new" {
+                Ok(TabTarget::New)
+            } else {
+                Err(Error::InvalidAction("tab must be 'new' or a number".to_string()))
+            }
+        }
+        serde_yaml::Value::Number(n) => {
+            n.as_u64()
+                .map(|v| TabTarget::Existing(v as usize))
+                .ok_or_else(|| Error::InvalidAction("tab must be 'new' or a number".to_string()))
+        }
+        _ => Err(Error::InvalidAction("tab must be 'new' or a number".to_string())),
+    }
+}
+
+fn parse_usize_value(value: &serde_yaml::Value) -> Result<usize, Error> {
+    match value {
+        serde_yaml::Value::Number(n) => {
+            n.as_u64()
+                .map(|v| v as usize)
+                .ok_or_else(|| Error::InvalidAction("Expected a number".to_string()))
+        }
+        _ => Err(Error::InvalidAction("Expected a number".to_string())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1010,9 +1064,10 @@ auth:
         let actions = flow_file.get("auth").unwrap();
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            Action::Goto { url, wait_until } => {
+            Action::Goto { url, wait_until, tab } => {
                 assert_eq!(url, "https://example.com");
                 assert!(wait_until.is_none());
+                assert!(tab.is_none());
             }
             _ => panic!("Expected Goto action"),
         }

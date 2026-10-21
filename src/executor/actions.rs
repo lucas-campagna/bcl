@@ -1,9 +1,11 @@
 use crate::error::Error;
-use crate::flow::{Action, Condition, Context, FlowFile, Selector, SelectorPath};
+use crate::flow::{Action, Condition, Context, FlowFile, Selector, SelectorPath, TabTarget};
 use crate::executor::selector;
 use crate::executor::utils::{get_timeout, parse_builtin_variables, ensure_page_initialized};
 use ferridriver::options::{InputFiles, SelectOptionOptions, SelectOptionValue, SetInputFilesOptions};
 use reqwest::Client;
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -43,6 +45,47 @@ async fn handle_action_error(
     Ok(())
 }
 
+async fn resolve_page_for_tab(
+    browser: &ferridriver::Browser,
+    tab_target: TabTarget,
+    verbose: bool,
+) -> Result<Arc<ferridriver::Page>, Error> {
+    match tab_target {
+        TabTarget::New => {
+            if verbose {
+                eprintln!("[EXEC] Creating new tab");
+            }
+            browser
+                .new_page()
+                .await
+                .map_err(|e| Error::ActionFailed(format!("Failed to create new tab: {}", e)))
+        }
+        TabTarget::Existing(index) => {
+            if verbose {
+                eprintln!("[EXEC] Switching to tab {}", index);
+            }
+            let context = browser.default_context();
+            let pages = context
+                .pages()
+                .await
+                .map_err(|e| Error::ActionFailed(format!("Failed to get pages: {}", e)))?;
+            if index == 0 || index > pages.len() {
+                return Err(Error::ActionFailed(format!(
+                    "Tab index {} out of range (1-{}), no such tab",
+                    index,
+                    pages.len()
+                )));
+            }
+            let target_page = pages.get(index - 1).unwrap().clone();
+            target_page
+                .bring_to_front()
+                .await
+                .map_err(|e| Error::ActionFailed(format!("Failed to bring tab to front: {}", e)))?;
+            Ok(target_page)
+        }
+    }
+}
+
 pub async fn run_actions(
     ws_url: &str,
     actions: &[Action],
@@ -70,31 +113,73 @@ pub async fn run_actions(
     }
     .map_err(|e| Error::ConnectionFailed(format!("Failed to connect to browser: {}", e)))?;
 
+    let browser = Arc::new(browser);
+
     let page = browser
         .page()
         .await
         .map_err(|e| Error::ConnectionFailed(format!("Failed to get page: {}", e)))?;
 
-    page.set_default_navigation_timeout(5000);
+    let page: Rc<RefCell<Arc<ferridriver::Page>>> = Rc::new(RefCell::new(page));
+
+    page.borrow().set_default_navigation_timeout(5000);
 
     for action in actions {
         let start = Instant::now();
         match action {
-            Action::Goto { url, wait_until } => {
-                let resolved_url = context.resolve_with_url(url, Some(&page.url()));
+            Action::Goto { url, wait_until, tab } => {
+                if let Some(tab_target) = tab {
+                    let new_page = resolve_page_for_tab(&browser, *tab_target, verbose).await?;
+                    new_page.set_default_navigation_timeout(5000);
+                    *page.borrow_mut() = new_page;
+                }
+                let current_page = page.borrow();
+                let resolved_url = context.resolve_with_url(url, Some(&current_page.url()));
                 if verbose {
                     eprintln!("[EXEC] goto: url={}", resolved_url);
                 }
                 let wait_until = wait_until.clone().unwrap_or_else(|| "commit".to_string());
-                page.goto(
-                    &resolved_url,
-                    Some(ferridriver::options::GotoOptions {
-                        wait_until: Some(wait_until),
-                        ..Default::default()
-                    }),
-                )
-                .await
-                .map_err(|e| Error::ActionFailed(format!("Failed to goto URL: {}", e)))?;
+                current_page
+                    .goto(
+                        &resolved_url,
+                        Some(ferridriver::options::GotoOptions {
+                            wait_until: Some(wait_until),
+                            ..Default::default()
+                        }),
+                    )
+                    .await
+                    .map_err(|e| Error::ActionFailed(format!("Failed to goto URL: {}", e)))?;
+            }
+            Action::Tab { index, close } => {
+                if verbose {
+                    eprintln!("[EXEC] tab: index={}, close={}", index, close);
+                }
+                let context_ref = browser.default_context();
+                let pages = context_ref
+                    .pages()
+                    .await
+                    .map_err(|e| Error::ActionFailed(format!("Failed to get pages: {}", e)))?;
+                if *index == 0 || *index > pages.len() {
+                    return Err(Error::ActionFailed(format!(
+                        "Tab index {} out of range (1-{}), no such tab",
+                        index,
+                        pages.len()
+                    )));
+                }
+                if *close {
+                    let target_page = pages.get(*index - 1).unwrap().clone();
+                    target_page
+                        .close(None)
+                        .await
+                        .map_err(|e| Error::ActionFailed(format!("Failed to close tab: {}", e)))?;
+                } else {
+                    let target_page = pages.get(*index - 1).unwrap().clone();
+                    target_page
+                        .bring_to_front()
+                        .await
+                        .map_err(|e| Error::ActionFailed(format!("Failed to bring tab to front: {}", e)))?;
+                    *page.borrow_mut() = target_page;
+                }
             }
             Action::Type {
                 value,
@@ -106,23 +191,28 @@ pub async fn run_actions(
                 shadow_root,
                 iframe,
             } => {
-                let result = do_type(&page, context, value, target, *secret, *action_timeout, shadow_root, iframe, verbose).await;
+                let current_page = page.borrow();
+                let result = do_type(&*current_page, context, value, target, *secret, *action_timeout, shadow_root, iframe, verbose).await;
+                drop(current_page);
                 if let Err(e) = result {
                     handle_action_error(ws_url, e, on_error, on_timeout, context, verbose, flows).await?;
                 }
             }
             Action::Click { target, timeout: action_timeout, on_error, on_timeout, shadow_root, iframe, .. } => {
-                let result = do_click(&page, target, *action_timeout, shadow_root, iframe, verbose).await;
+                let current_page = page.borrow();
+                let result = do_click(&*current_page, target, *action_timeout, shadow_root, iframe, verbose).await;
+                drop(current_page);
                 if let Err(e) = result {
                     handle_action_error(ws_url, e, on_error, on_timeout, context, verbose, flows).await?;
                 }
             }
             Action::Press { key } => {
-                let resolved_key = context.resolve_with_url(key, Some(&page.url()));
+                let current_page = page.borrow();
+                let resolved_key = context.resolve_with_url(key, Some(&current_page.url()));
                 if verbose {
                     eprintln!("[EXEC] press: key={}", resolved_key);
                 }
-                page.keyboard()
+                current_page.keyboard()
                     .press(&resolved_key, None)
                     .await
                     .map_err(|e| Error::ActionFailed(format!("Failed to press key: {}", e)))?;
@@ -137,7 +227,9 @@ pub async fn run_actions(
                 shadow_root,
                 iframe,
             } => {
-                let result = do_wait(&page, context, url, target, duration, *action_timeout, shadow_root, iframe, verbose).await;
+                let current_page = page.borrow();
+                let result = do_wait(&*current_page, context, url, target, duration, *action_timeout, shadow_root, iframe, verbose).await;
+                drop(current_page);
                 if let Err(e) = result {
                     handle_action_error(ws_url, e, on_error, on_timeout, context, verbose, flows).await?;
                 }
@@ -150,7 +242,9 @@ pub async fn run_actions(
                 context.set(to, &value);
             }
             Action::Hover { target, timeout: action_timeout, on_error, on_timeout, shadow_root, iframe, .. } => {
-                let result = do_hover(&page, target, *action_timeout, shadow_root, iframe, verbose).await;
+                let current_page = page.borrow();
+                let result = do_hover(&*current_page, target, *action_timeout, shadow_root, iframe, verbose).await;
+                drop(current_page);
                 if let Err(e) = result {
                     handle_action_error(ws_url, e, on_error, on_timeout, context, verbose, flows).await?;
                 }
@@ -160,7 +254,9 @@ pub async fn run_actions(
                 then,
                 else_,
             } => {
-                let condition_met = evaluate_condition(&page, condition, context, verbose).await?;
+                let current_page = page.borrow();
+                let condition_met = evaluate_condition(&*current_page, condition, context, verbose).await?;
+                drop(current_page);
                 if verbose {
                     eprintln!("[EXEC] if: condition={}", condition_met);
                 }
@@ -179,61 +275,81 @@ pub async fn run_actions(
                 shadow_root,
                 iframe,
             } => {
-                let result = do_read(&page, context, target, to, *html, attribute.as_deref(), *value, *action_timeout, shadow_root, iframe, verbose).await;
+                let current_page = page.borrow();
+                let result = do_read(&*current_page, context, target, to, *html, attribute.as_deref(), *value, *action_timeout, shadow_root, iframe, verbose).await;
+                drop(current_page);
                 if let Err(e) = result {
                     handle_action_error(ws_url, e, on_error, on_timeout, context, verbose, flows).await?;
                 }
             }
             Action::Select { value, target, values, timeout: action_timeout, on_error, on_timeout, shadow_root, iframe } => {
-                let result = do_select(&page, context, value, target, values, *action_timeout, shadow_root, iframe, verbose).await;
+                let current_page = page.borrow();
+                let result = do_select(&*current_page, context, value, target, values, *action_timeout, shadow_root, iframe, verbose).await;
+                drop(current_page);
                 if let Err(e) = result {
                     handle_action_error(ws_url, e, on_error, on_timeout, context, verbose, flows).await?;
                 }
             }
             Action::Check { target, timeout: action_timeout, on_error, on_timeout, shadow_root, iframe, .. } => {
-                let result = do_check(&page, target, *action_timeout, shadow_root, iframe, true, verbose).await;
+                let current_page = page.borrow();
+                let result = do_check(&*current_page, target, *action_timeout, shadow_root, iframe, true, verbose).await;
+                drop(current_page);
                 if let Err(e) = result {
                     handle_action_error(ws_url, e, on_error, on_timeout, context, verbose, flows).await?;
                 }
             }
             Action::Uncheck { target, timeout: action_timeout, on_error, on_timeout, shadow_root, iframe, .. } => {
-                let result = do_check(&page, target, *action_timeout, shadow_root, iframe, false, verbose).await;
+                let current_page = page.borrow();
+                let result = do_check(&*current_page, target, *action_timeout, shadow_root, iframe, false, verbose).await;
+                drop(current_page);
                 if let Err(e) = result {
                     handle_action_error(ws_url, e, on_error, on_timeout, context, verbose, flows).await?;
                 }
             }
             Action::DblClick { target, timeout: action_timeout, on_error, on_timeout, shadow_root, iframe, .. } => {
-                let result = do_dblclick(&page, target, *action_timeout, shadow_root, iframe, verbose).await;
+                let current_page = page.borrow();
+                let result = do_dblclick(&*current_page, target, *action_timeout, shadow_root, iframe, verbose).await;
+                drop(current_page);
                 if let Err(e) = result {
                     handle_action_error(ws_url, e, on_error, on_timeout, context, verbose, flows).await?;
                 }
             }
             Action::RightClick { target, timeout: action_timeout, on_error, on_timeout, shadow_root, iframe, .. } => {
-                let result = do_right_click(&page, target, *action_timeout, shadow_root, iframe, verbose).await;
+                let current_page = page.borrow();
+                let result = do_right_click(&*current_page, target, *action_timeout, shadow_root, iframe, verbose).await;
+                drop(current_page);
                 if let Err(e) = result {
                     handle_action_error(ws_url, e, on_error, on_timeout, context, verbose, flows).await?;
                 }
             }
             Action::Clear { target, timeout: action_timeout, on_error, on_timeout, shadow_root, iframe, .. } => {
-                let result = do_clear(&page, target, *action_timeout, shadow_root, iframe, verbose).await;
+                let current_page = page.borrow();
+                let result = do_clear(&*current_page, target, *action_timeout, shadow_root, iframe, verbose).await;
+                drop(current_page);
                 if let Err(e) = result {
                     handle_action_error(ws_url, e, on_error, on_timeout, context, verbose, flows).await?;
                 }
             }
             Action::Upload { files, target, timeout: action_timeout, on_error, on_timeout, shadow_root, iframe } => {
-                let result = do_upload(&page, files, target, *action_timeout, shadow_root, iframe, verbose).await;
+                let current_page = page.borrow();
+                let result = do_upload(&*current_page, files, target, *action_timeout, shadow_root, iframe, verbose).await;
+                drop(current_page);
                 if let Err(e) = result {
                     handle_action_error(ws_url, e, on_error, on_timeout, context, verbose, flows).await?;
                 }
             }
             Action::Drag { source, to, timeout: action_timeout, on_error, on_timeout, shadow_root, iframe, .. } => {
-                let result = do_drag(&page, context, source, to, *action_timeout, shadow_root, iframe, verbose).await;
+                let current_page = page.borrow();
+                let result = do_drag(&*current_page, context, source, to, *action_timeout, shadow_root, iframe, verbose).await;
+                drop(current_page);
                 if let Err(e) = result {
                     handle_action_error(ws_url, e, on_error, on_timeout, context, verbose, flows).await?;
                 }
             }
             Action::Scroll { target, x, y, timeout: action_timeout, on_error, on_timeout, shadow_root, iframe } => {
-                let result = do_scroll(&page, context, target, *x, *y, *action_timeout, shadow_root, iframe, verbose).await;
+                let current_page = page.borrow();
+                let result = do_scroll(&*current_page, context, target, *x, *y, *action_timeout, shadow_root, iframe, verbose).await;
+                drop(current_page);
                 if let Err(e) = result {
                     handle_action_error(ws_url, e, on_error, on_timeout, context, verbose, flows).await?;
                 }
@@ -242,7 +358,7 @@ pub async fn run_actions(
                 if verbose {
                     eprintln!("[EXEC] dialog: mode={}, timeout={:?}", mode, timeout);
                 }
-                let page_clone = Arc::clone(&page);
+                let page_clone = Arc::clone(&*page.borrow());
                 let mode_str = mode.clone();
                 let prompt = prompt_text.clone();
                 let timeout_ms = timeout.unwrap_or(5000);
@@ -268,9 +384,11 @@ pub async fn run_actions(
                     eprintln!("[EXEC] download: path={}, timeout={:?}, to={:?}", path, timeout, to);
                 }
                 let timeout_ms = timeout.unwrap_or(30000);
-                let download = page.wait_for_download(timeout_ms)
+                let current_page = page.borrow();
+                let download = current_page.wait_for_download(timeout_ms)
                     .await
                     .map_err(|e| Error::ActionFailed(format!("Failed to wait for download: {}", e)))?;
+                drop(current_page);
                 let target_path = std::path::Path::new(&path);
                 download.save_as(target_path)
                     .await
@@ -280,7 +398,9 @@ pub async fn run_actions(
                 }
             }
             Action::Log { text } => {
-                let resolved_text = parse_builtin_variables(&page, text).await?;
+                let current_page = page.borrow();
+                let resolved_text = parse_builtin_variables(&*current_page, text).await?;
+                drop(current_page);
                 let resolved_text = context.resolve(&resolved_text);
                 if verbose {
                     eprintln!("[EXEC] log: text={}", resolved_text);
@@ -309,14 +429,17 @@ pub async fn run_actions(
                 .await?;
             }
             Action::Js { code, to, on_error } => {
-                let result = do_js(&page, context, code, to, verbose).await;
+                let current_page = page.borrow();
+                let result = do_js(&*current_page, context, code, to, verbose).await;
+                drop(current_page);
                 if let Err(e) = result {
                     handle_action_error(ws_url, e, on_error, &None, context, verbose, flows).await?;
                 }
             }
             Action::Define { var, value, overwrite } => {
+                let current_page = page.borrow();
                 if *overwrite || !context.is_defined(var) {
-                    let resolved_value = resolve_yaml_value(value, context, Some(&page.url()));
+                    let resolved_value = resolve_yaml_value(value, context, Some(&current_page.url()));
                     if verbose {
                         eprintln!("[EXEC] define: {}={:?}", var, resolved_value);
                     }
@@ -364,6 +487,7 @@ pub async fn run_actions(
                 let max_iter = max.unwrap_or(100);
                 let mut iterations = 0;
                 loop {
+                    let current_page = page.borrow();
                     iterations += 1;
                     if iterations > max_iter {
                         if verbose {
@@ -371,7 +495,8 @@ pub async fn run_actions(
                         }
                         break;
                     }
-                    let cond_met = evaluate_condition(&page, condition, context, verbose).await?;
+                    let cond_met = evaluate_condition(&*current_page, condition, context, verbose).await?;
+                    drop(current_page);
                     if !cond_met {
                         break;
                     }
@@ -411,7 +536,9 @@ pub async fn run_actions(
                 if verbose {
                     eprintln!("[EXEC] assert");
                 }
-                let cond_met = evaluate_condition(&page, condition, context, verbose).await?;
+                let current_page = page.borrow();
+                let cond_met = evaluate_condition(&*current_page, condition, context, verbose).await?;
+                drop(current_page);
                 if !cond_met {
                     let msg = message.as_ref().map(|s| s.as_str()).unwrap_or("assertion failed");
                     return Err(Error::Assertion(msg.to_string()));
@@ -421,10 +548,12 @@ pub async fn run_actions(
                 if verbose {
                     eprintln!("[EXEC] return: {:?}", values);
                 }
+                let current_page = page.borrow();
                 for (key, value) in values {
-                    let resolved = resolve_yaml_value(value, context, Some(&page.url()));
+                    let resolved = resolve_yaml_value(value, context, Some(&current_page.url()));
                     context.set_yaml(&format!("__return.{}", key), resolved);
                 }
+                drop(current_page);
             }
             Action::Fail { message } => {
                 return Err(Error::ActionFailed(message.clone()));
@@ -464,10 +593,7 @@ pub async fn run_actions(
                 let routes_clone = routes.clone();
                 let ws_url_clone = ws_url.clone();
                 let verbose = verbose;
-                let server_future = run_server(base_path.clone(), *port, ws_url_clone, routes_clone, flows_clone, verbose);
-                tokio::spawn(async move {
-                    let _ = server_future.await;
-                });
+                run_server(base_path.clone(), *port, ws_url_clone, routes_clone, flows_clone, verbose).await?;
             }
         }
         if verbose {
@@ -1578,6 +1704,7 @@ async fn run_server(
 
     if verbose {
         eprintln!("[SERVER] listening on {}", addr);
+        eprintln!("[SERVER] routes: {:?}", routes);
     }
 
     loop {
@@ -1594,27 +1721,30 @@ async fn run_server(
                     let mut request_line = String::new();
                     let mut headers = Vec::new();
                     let mut content_length = 0;
+                    let mut header_end_offset = 0;
+                    let mut bytes_read_total = 0;
 
                     loop {
-                        match stream.read(&mut buf).await {
+                        match stream.read(&mut buf[bytes_read_total..]).await {
                             Ok(0) => break,
                             Ok(n) => {
-                                let text = String::from_utf8_lossy(&buf[..n]);
-                                for line in text.lines() {
-                                    if request_line.is_empty() {
-                                        request_line = line.to_string();
-                                    } else if line.is_empty() {
-                                        break;
-                                    } else {
-                                        headers.push(line.to_string());
-                                        if line.to_lowercase().starts_with("content-length:") {
-                                            if let Ok(len) = line.split(':').nth(1).unwrap_or("0").trim().parse::<usize>() {
-                                                content_length = len;
+                                bytes_read_total += n;
+                                let text = String::from_utf8_lossy(&buf[..bytes_read_total]);
+                                if let Some(end_pos) = text.find("\r\n\r\n") {
+                                    header_end_offset = end_pos + 4;
+                                    let header_text = &text[..end_pos];
+                                    for line in header_text.lines() {
+                                        if request_line.is_empty() {
+                                            request_line = line.to_string();
+                                        } else {
+                                            headers.push(line.to_string());
+                                            if line.to_lowercase().starts_with("content-length:") {
+                                                if let Ok(len) = line.split(':').nth(1).unwrap_or("0").trim().parse::<usize>() {
+                                                    content_length = len;
+                                                }
                                             }
                                         }
                                     }
-                                }
-                                if !request_line.is_empty() && (line_count(&text) > headers.len() as usize || content_length > 0) {
                                     break;
                                 }
                             }
@@ -1646,17 +1776,12 @@ async fn run_server(
                     };
 
                     let mut body = String::new();
-                    if content_length > 0 {
-                        let mut body_buf = vec![0u8; content_length];
-                        let mut total_read = 0;
-                        while total_read < content_length {
-                            match stream.read(&mut body_buf[total_read..]).await {
-                                Ok(0) => break,
-                                Ok(n) => total_read += n,
-                                Err(_) => break,
-                            }
+                    if content_length > 0 && header_end_offset > 0 {
+                        let body_start = header_end_offset;
+                        let body_end = (header_end_offset + content_length).min(bytes_read_total);
+                        if body_start < bytes_read_total {
+                            body = String::from_utf8_lossy(&buf[body_start..body_end]).to_string();
                         }
-                        body = String::from_utf8_lossy(&body_buf[..total_read]).to_string();
                     }
 
                     let route_config = routes.get(&route_path);
@@ -1675,9 +1800,9 @@ async fn run_server(
                         let mut ctx = crate::flow::Context::new();
 
                         let mut request_map = serde_yaml::Mapping::new();
-                        request_map.insert(serde_yaml::Value::String("METHOD".to_string()), serde_yaml::Value::String(method.clone()));
-                        request_map.insert(serde_yaml::Value::String("PATH".to_string()), serde_yaml::Value::String(route_path.clone()));
-                        request_map.insert(serde_yaml::Value::String("BASE_PATH".to_string()), serde_yaml::Value::String(base_path.clone()));
+                        request_map.insert(serde_yaml::Value::String("method".to_string()), serde_yaml::Value::String(method.clone()));
+                        request_map.insert(serde_yaml::Value::String("path".to_string()), serde_yaml::Value::String(route_path.clone()));
+                        request_map.insert(serde_yaml::Value::String("base_path".to_string()), serde_yaml::Value::String(base_path.clone()));
 
                         let mut headers_map = serde_yaml::Mapping::new();
                         for header in &headers {
@@ -1688,7 +1813,7 @@ async fn run_server(
                                 );
                             }
                         }
-                        request_map.insert(serde_yaml::Value::String("HEADERS".to_string()), serde_yaml::Value::Mapping(headers_map));
+                        request_map.insert(serde_yaml::Value::String("headers".to_string()), serde_yaml::Value::Mapping(headers_map));
 
                         if let Some(qs) = &query_string {
                             let mut query_map = serde_yaml::Mapping::new();
@@ -1701,11 +1826,36 @@ async fn run_server(
                                     );
                                 }
                             }
-                            request_map.insert(serde_yaml::Value::String("QUERY_PARAMS".to_string()), serde_yaml::Value::Mapping(query_map));
+                            request_map.insert(serde_yaml::Value::String("query_params".to_string()), serde_yaml::Value::Mapping(query_map));
                         }
 
                         if !body.is_empty() {
-                            if body.contains('=') {
+                            let looks_like_json = body.trim().starts_with('{') || body.trim().starts_with('[');
+                            if looks_like_json {
+                                if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&body) {
+                                    if let Ok(yaml_value) = serde_yaml::to_value(json_value) {
+                                        request_map.insert(serde_yaml::Value::String("body".to_string()), yaml_value);
+                                    } else {
+                                        request_map.insert(serde_yaml::Value::String("body".to_string()), serde_yaml::Value::String(body.clone()));
+                                    }
+                                } else {
+                                    let mut body_map = serde_yaml::Mapping::new();
+                                    for pair in body.split('&') {
+                                        let parts: Vec<&str> = pair.splitn(2, '=').collect();
+                                        if parts.len() == 2 {
+                                            body_map.insert(
+                                                serde_yaml::Value::String(parts[0].to_string()),
+                                                serde_yaml::Value::String(parts[1].to_string()),
+                                            );
+                                        }
+                                    }
+                                    if body_map.is_empty() {
+                                        request_map.insert(serde_yaml::Value::String("body".to_string()), serde_yaml::Value::String(body.clone()));
+                                    } else {
+                                        request_map.insert(serde_yaml::Value::String("body".to_string()), serde_yaml::Value::Mapping(body_map));
+                                    }
+                                }
+                            } else {
                                 let mut body_map = serde_yaml::Mapping::new();
                                 for pair in body.split('&') {
                                     let parts: Vec<&str> = pair.splitn(2, '=').collect();
@@ -1716,15 +1866,17 @@ async fn run_server(
                                         );
                                     }
                                 }
-                                request_map.insert(serde_yaml::Value::String("BODY".to_string()), serde_yaml::Value::Mapping(body_map));
-                            } else {
-                                request_map.insert(serde_yaml::Value::String("BODY".to_string()), serde_yaml::Value::String(body.clone()));
+                                if body_map.is_empty() {
+                                    request_map.insert(serde_yaml::Value::String("body".to_string()), serde_yaml::Value::String(body.clone()));
+                                } else {
+                                    request_map.insert(serde_yaml::Value::String("body".to_string()), serde_yaml::Value::Mapping(body_map));
+                                }
                             }
                         }
 
-                        ctx.set_yaml("REQUEST", serde_yaml::Value::Mapping(request_map));
+                        ctx.set_yaml("request", serde_yaml::Value::Mapping(request_map));
 
-                        let ws_url_for_actions = ws_url.clone().unwrap_or_else(|| "ws://localhost:9222".to_string());
+                        let ws_url_for_actions = ws_url.clone().unwrap_or_else(|| "http://127.0.0.1:9222".to_string());
                         let result = execute_server_flow(&flow_name, &mut ctx, verbose, &flows, &ws_url_for_actions).await;
 
                         match result {
@@ -1762,10 +1914,6 @@ async fn run_server(
     }
 }
 
-fn line_count(text: &str) -> usize {
-    text.lines().count()
-}
-
 async fn execute_server_flow(
     flow_name: &str,
     context: &mut crate::flow::Context,
@@ -1786,14 +1934,14 @@ fn build_response_from_context(context: &crate::flow::Context) -> (u16, String, 
     let mut body = "{}".to_string();
     let mut headers = String::new();
 
-    if let Some(response_val) = context.get("RESPONSE") {
+    if let Some(response_val) = context.get("response") {
         if let Some(status_val) = response_val.get("status") {
             if let Some(n) = status_val.as_i64() {
                 status = n as u16;
             }
         }
         if let Some(body_val) = response_val.get("body") {
-            body = serde_yaml::to_string(body_val).unwrap_or_else(|_| "{}".to_string());
+            body = serde_json::to_string(body_val).unwrap_or_else(|_| "{}".to_string());
         }
         if let Some(headers_val) = response_val.get("headers") {
             if let serde_yaml::Value::Mapping(map) = headers_val {
@@ -1809,23 +1957,6 @@ fn build_response_from_context(context: &crate::flow::Context) -> (u16, String, 
     }
 
     (status, body, headers)
-}
-
-fn handle_browser_action(
-    ws_url: String,
-    action: crate::flow::Action,
-    context: crate::flow::Context,
-    verbose: bool,
-    flows: crate::flow::FlowFile,
-) {
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let actions = vec![action];
-            let mut ctx = context;
-            run_actions(&ws_url, &actions, &mut ctx, verbose, &flows).await.ok();
-        });
-    });
 }
 
 async fn run_server_actions(
@@ -1911,9 +2042,22 @@ async fn run_server_actions(
                 }
                 let ws_url = ws_url.to_string();
                 let action = action.clone();
-                let context = context.clone();
                 let flows = flows.clone();
-                handle_browser_action(ws_url, action, context, verbose, flows);
+                let (tx, rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    rt.block_on(async {
+                        let browser_actions = vec![action];
+                        let mut ctx = crate::flow::Context::new();
+                        let result = run_actions(&ws_url, &browser_actions, &mut ctx, verbose, &flows).await;
+                        tx.send(result).ok();
+                    });
+                });
+                if let Err(e) = rx.recv() {
+                    if verbose {
+                        eprintln!("[SERVER] browser action error: {}", e);
+                    }
+                }
             }
         }
     }

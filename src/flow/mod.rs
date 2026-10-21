@@ -44,10 +44,17 @@ impl SelectorPath {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TabTarget {
+    New,
+    Existing(usize),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Action {
-    Goto { url: String, wait_until: Option<String> },
+    Goto { url: String, wait_until: Option<String>, #[serde(default)] tab: Option<TabTarget> },
+    Tab { index: usize, #[serde(default)] close: bool },
     Type {
         value: String,
         target: Option<String>,
@@ -336,7 +343,7 @@ impl Context {
     fn set_nested(&mut self, path: &str, value: serde_yaml::Value) {
         let path_regex = regex::Regex::new(r"\.([a-zA-Z_][a-zA-Z0-9_]*)|\[([0-9]+)\]").unwrap();
 
-        let base_var_regex = regex::Regex::new(r"^([A-Z_][A-Z0-9_]*)").unwrap();
+        let base_var_regex = regex::Regex::new(r"^([a-zA-Z_][a-zA-Z0-9_]*)").unwrap();
         let base_name = match base_var_regex.captures(path).and_then(|c| c.get(1)).map(|m| m.as_str()) {
             Some(name) => name,
             None => return,
@@ -438,7 +445,7 @@ impl Context {
     }
 
     pub fn is_defined(&self, key: &str) -> bool {
-        let base_var_regex = regex::Regex::new(r"^([A-Z_][A-Z0-9_]*)").unwrap();
+        let base_var_regex = regex::Regex::new(r"^([a-zA-Z_][a-zA-Z0-9_]*)").unwrap();
         if let Some(caps) = base_var_regex.captures(key) {
             if let Some(name) = caps.get(1) {
                 return self.vars.contains_key(name.as_str());
@@ -490,7 +497,7 @@ impl Context {
     fn get_yaml_value(&self, var_name: &str) -> YamlResolveResult {
         let path_regex = regex::Regex::new(r"\.([a-zA-Z_][a-zA-Z0-9_]*)|\[([0-9]+)\]").unwrap();
 
-        let base_var_regex = regex::Regex::new(r"^([A-Z_][A-Z0-9_]*)").unwrap();
+        let base_var_regex = regex::Regex::new(r"^([a-zA-Z_][a-zA-Z0-9_]*)").unwrap();
         let base_name = match base_var_regex.captures(var_name).and_then(|c| c.get(1)).map(|m| m.as_str()) {
             Some(name) => name,
             None => return YamlResolveResult::NotFound,
@@ -540,7 +547,7 @@ impl Context {
     }
 
     pub fn resolve_with_url(&self, input: &str, current_url: Option<&str>) -> String {
-        let var_regex = regex::Regex::new(r"\$([A-Z_][A-Z0-9_\.a-zA-Z\[\]0-9]*|url)").unwrap();
+        let var_regex = regex::Regex::new(r"\$([a-zA-Z_][a-zA-Z0-9_\.a-zA-Z\[\]0-9]*|url)").unwrap();
         let mut result = input.to_string();
         for cap in var_regex.captures_iter(input) {
             let full_match = &cap[0];

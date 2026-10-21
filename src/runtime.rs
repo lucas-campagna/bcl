@@ -64,7 +64,7 @@ mod tests {
         </body></html>"#;
 
         let actions = vec![
-            Action::Goto { url: html.to_string(), wait_until: Some("commit".to_string()) },
+            Action::Goto { url: html.to_string(), wait_until: Some("commit".to_string()), tab: None },
             Action::Type {
                 value: "$CODE".to_string(),
                 target: Some("//input".to_string()),
