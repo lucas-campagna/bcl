@@ -235,11 +235,17 @@ Call another flow:
 
 ### js
 
-Execute JavaScript:
+Execute JavaScript. The value of the final expression is the result; a top-level `return` is not needed. Use `to` to store the result in a variable:
 
 ```yaml
-- js: return document.title
+- js: document.title
   to: PAGE_TITLE
+
+# Multi-line scripts also return their final expression's value
+- js: |
+    const sum = (a, b) => a + b
+    sum(1, sum(2, 3))
+  to: RESULT
 ```
 
 ### define
