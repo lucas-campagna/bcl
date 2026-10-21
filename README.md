@@ -28,16 +28,17 @@ bcl list assets/clear.yml
 
 ```bash
 bcl run <path_to_yaml> [options]
-bcl exec <action> <value> [<action> <value> ...]
+bcl exec <action> <value> [--option value ...]
 bcl validate <path_to_yaml>
 bcl list <path_to_yaml>
 ```
 
-`exec` runs valid BCL browser actions in order. Provide each action name followed by its value:
+`exec` runs one valid BCL browser action. Pass action options as `--name value` or `--name=value`:
 
 ```bash
 bcl exec goto https://example.com
-bcl exec goto https://example.com click '#submit'
+bcl exec read //body --html true
+bcl exec read '//*[@id="link"]' --to LINK_REF --attribute href
 ```
 
 ### Run Options

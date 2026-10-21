@@ -21,7 +21,7 @@ pub enum Cli {
     },
     /// Compile a YAML flow file into a standalone shell script
     Compile(CompileArgs),
-    /// Execute one or more BCL browser actions
+    /// Execute one BCL browser action
     Exec(ExecArgs),
 }
 
@@ -59,14 +59,15 @@ pub struct CompileArgs {
 #[derive(Parser, Debug)]
 #[command(trailing_var_arg = true)]
 pub struct ExecArgs {
-    /// BCL action/value pairs, such as `goto URL click SELECTOR`
-    #[arg(
-        required = true,
-        num_args = 2..,
-        value_names = ["ACTION", "VALUE"],
-        allow_hyphen_values = true
-    )]
-    pub commands: Vec<String>,
+    /// BCL action to execute
+    #[arg(value_name = "ACTION")]
+    pub action: String,
+    /// The action's primary value
+    #[arg(value_name = "VALUE")]
+    pub value: String,
+    /// Optional action parameters in `--name value` or `--name=value` form
+    #[arg(value_name = "OPTION", num_args = 0.., allow_hyphen_values = true)]
+    pub options: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize)]
@@ -397,38 +398,96 @@ exec bcl run -t "$FLOW_NAME" - "${{EXTRA_ARGS[@]}}" <<< "$YAML_CONTENT"
     Ok(())
 }
 
-fn parse_exec_commands(args: &ExecArgs) -> anyhow::Result<bcl::FlowFile> {
-    if args.commands.len() % 2 != 0 {
-        return Err(anyhow::anyhow!(
-            "Exec expects action/value pairs, but received an action without a value"
-        ));
+fn parse_exec_scalar(action: &str, field: Option<&str>, value: &str) -> anyhow::Result<serde_yaml::Value> {
+    let bool_field = matches!(
+        (action, field),
+        ("type", Some("secret"))
+            | ("read", Some("html" | "value"))
+            | ("define" | "set", Some("overwrite"))
+            | ("tab", Some("close"))
+    );
+    if bool_field {
+        let parsed = value.parse::<bool>().map_err(|_| {
+            anyhow::anyhow!("Expected true or false for parameter '{}', got {:?}", field.unwrap(), value)
+        })?;
+        return Ok(serde_yaml::Value::Bool(parsed));
     }
 
-    let actions = args
-        .commands
-        .chunks_exact(2)
-        .map(|pair| {
-            let mut action = serde_yaml::Mapping::new();
-            action.insert(
-                serde_yaml::Value::String(pair[0].clone()),
-                serde_yaml::Value::String(pair[1].clone()),
-            );
-            serde_yaml::Value::Mapping(action)
-        })
-        .collect();
+    let integer_field = matches!(field, Some("timeout" | "duration" | "max" | "interval" | "port"));
+    let signed_integer_field = matches!(field, Some("x" | "y"));
+    let numeric_primary = field.is_none() && matches!(action, "tab" | "wait" | "retry");
+    let define_value = matches!((action, field), ("define" | "set", Some("value")));
+
+    if integer_field || numeric_primary {
+        if let Ok(parsed) = value.parse::<u64>() {
+            return Ok(serde_yaml::Value::Number(parsed.into()));
+        }
+    } else if signed_integer_field {
+        if let Ok(parsed) = value.parse::<i64>() {
+            return Ok(serde_yaml::Value::Number(parsed.into()));
+        }
+    } else if define_value {
+        if value == "true" || value == "false" {
+            return Ok(serde_yaml::Value::Bool(value == "true"));
+        }
+        if let Ok(parsed) = value.parse::<i64>() {
+            return Ok(serde_yaml::Value::Number(parsed.into()));
+        }
+    }
+
+    Ok(serde_yaml::Value::String(value.to_string()))
+}
+
+fn parse_exec_action(args: &ExecArgs) -> anyhow::Result<bcl::FlowFile> {
+    let action_name = &args.action;
+    let value = &args.value;
+    let mut action = serde_yaml::Mapping::new();
+    action.insert(
+        serde_yaml::Value::String(action_name.clone()),
+        parse_exec_scalar(action_name, None, value)?,
+    );
+
+    let mut index = 0;
+    while index < args.options.len() {
+        let option = args.options[index]
+            .strip_prefix("--")
+            .ok_or_else(|| anyhow::anyhow!("Expected an option beginning with '--', got {:?}", args.options[index]))?;
+        if option.is_empty() {
+            return Err(anyhow::anyhow!("Expected an option name after '--'"));
+        }
+
+        let (field, field_value, consumed) = if let Some((field, value)) = option.split_once('=') {
+            (field, value, 1)
+        } else {
+            let value = args.options.get(index + 1).ok_or_else(|| {
+                anyhow::anyhow!("Option '--{}' requires a value", option)
+            })?;
+            (option, value.as_str(), 2)
+        };
+        if field.is_empty() {
+            return Err(anyhow::anyhow!("Expected an option name after '--'"));
+        }
+
+        let field = field.replace('-', "_");
+        action.insert(
+            serde_yaml::Value::String(field.clone()),
+            parse_exec_scalar(action_name, Some(&field), field_value)?,
+        );
+        index += consumed;
+    }
 
     let mut flow = serde_yaml::Mapping::new();
     flow.insert(
         serde_yaml::Value::String("main".to_string()),
-        serde_yaml::Value::Sequence(actions),
+        serde_yaml::Value::Sequence(vec![serde_yaml::Value::Mapping(action)]),
     );
 
     let yaml = serde_yaml::to_string(&serde_yaml::Value::Mapping(flow))?;
     parse_str(&yaml).map_err(|e| anyhow::anyhow!("Invalid exec action: {}", e))
 }
 
-async fn exec_commands(args: &ExecArgs) -> anyhow::Result<()> {
-    let flow_file = parse_exec_commands(args)?;
+async fn exec_action(args: &ExecArgs) -> anyhow::Result<()> {
+    let flow_file = parse_exec_action(args)?;
     let actions = flow_file
         .get("main")
         .ok_or_else(|| anyhow::anyhow!("No valid actions were provided"))?;
@@ -466,7 +525,7 @@ fn main() {
         }
         Cli::Exec(ref args) => tokio::runtime::Runtime::new()
             .unwrap()
-            .block_on(exec_commands(args)),
+            .block_on(exec_action(args)),
     };
 
     if let Err(e) = result {
@@ -477,7 +536,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_exec_commands, Cli, ExecArgs, RunArgs};
+    use super::{parse_exec_action, Cli, ExecArgs, RunArgs};
     use clap::Parser;
     use std::path::PathBuf;
 
@@ -507,37 +566,107 @@ mod tests {
     }
 
     #[test]
-    fn exec_accepts_action_value_pairs() {
+    fn exec_accepts_options_as_separate_or_equals_arguments() {
         let cli = Cli::try_parse_from([
             "bcl",
             "exec",
-            "goto",
-            "https://example.com",
-            "click",
-            "#submit",
+            "read",
+            "//body",
+            "--html=true",
+            "--to=BODY_HTML",
         ])
         .unwrap();
 
         match cli {
             Cli::Exec(args) => {
-                assert_eq!(args.commands, ["goto", "https://example.com", "click", "#submit"]);
-                let flow_file = parse_exec_commands(&args).unwrap();
-                assert_eq!(flow_file.get("main").unwrap().len(), 2);
+                let flow_file = parse_exec_action(&args).unwrap();
+                let actions = flow_file.get("main").unwrap();
+                assert_eq!(actions.len(), 1);
+                match &actions[0] {
+                    bcl::flow::Action::Read { target, html, to, .. } => {
+                        assert_eq!(target.as_deref(), Some("//body"));
+                        assert!(*html);
+                        assert_eq!(to.as_deref(), Some("BODY_HTML"));
+                    }
+                    _ => panic!("Expected Read action"),
+                }
+            }
+            _ => panic!("Expected exec command"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "bcl",
+            "exec",
+            "read",
+            "//*[@id=\"link\"]",
+            "--html",
+            "true",
+            "--to",
+            "LINK_REF",
+            "--attribute",
+            "href",
+        ])
+        .unwrap();
+        match cli {
+            Cli::Exec(args) => {
+                let flow_file = parse_exec_action(&args).unwrap();
+                match &flow_file.get("main").unwrap()[0] {
+                    bcl::flow::Action::Read {
+                        target,
+                        html,
+                        to,
+                        attribute,
+                        ..
+                    } => {
+                        assert_eq!(target.as_deref(), Some("//*[@id=\"link\"]"));
+                        assert!(*html);
+                        assert_eq!(to.as_deref(), Some("LINK_REF"));
+                        assert_eq!(attribute.as_deref(), Some("href"));
+                    }
+                    _ => panic!("Expected Read action"),
+                }
             }
             _ => panic!("Expected exec command"),
         }
     }
 
     #[test]
-    fn exec_rejects_unknown_actions_and_unpaired_values() {
-        let unknown = ExecArgs {
-            commands: vec!["not_an_action".to_string(), "value".to_string()],
-        };
-        assert!(parse_exec_commands(&unknown).is_err());
+    fn exec_accepts_action_without_options() {
+        let cli = Cli::try_parse_from(["bcl", "exec", "goto", "https://example.com"]).unwrap();
 
-        let unpaired = ExecArgs {
-            commands: vec!["goto".to_string()],
+        match cli {
+            Cli::Exec(args) => {
+                let flow_file = parse_exec_action(&args).unwrap();
+                assert!(matches!(
+                    &flow_file.get("main").unwrap()[0],
+                    bcl::flow::Action::Goto { url, .. } if url == "https://example.com"
+                ));
+            }
+            _ => panic!("Expected exec command"),
+        }
+    }
+
+    #[test]
+    fn exec_rejects_unknown_actions_and_missing_option_values() {
+        let unknown = ExecArgs {
+            action: "not_an_action".to_string(),
+            value: "value".to_string(),
+            options: vec![],
         };
-        assert!(parse_exec_commands(&unpaired).is_err());
+        assert!(parse_exec_action(&unknown).is_err());
+
+        let missing_option_value = ExecArgs {
+            action: "read".to_string(),
+            value: "//body".to_string(),
+            options: vec!["--html".to_string()],
+        };
+        assert!(parse_exec_action(&missing_option_value).is_err());
+
+        let chained = ExecArgs {
+            action: "read".to_string(),
+            value: "//body".to_string(),
+            options: vec!["click".to_string(), "#submit".to_string()],
+        };
+        assert!(parse_exec_action(&chained).is_err());
     }
 }
