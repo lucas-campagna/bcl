@@ -13,9 +13,8 @@ Variables can come from:
 ## Usage
 
 ```yaml
-- define:
-    var: USERNAME
-    value: john
+- define: USERNAME
+  value: john
 - type: $USERNAME
   target: //*[@id="input"]
 ```
@@ -25,11 +24,10 @@ Variables can come from:
 Access nested YAML/object properties with dot notation:
 
 ```yaml
-- define:
-    var: CONFIG
-    value:
-      user:
-        name: john
+- define: CONFIG
+  value:
+    user:
+      name: john
 - log: $CONFIG.user.name
 ```
 
@@ -38,9 +36,8 @@ Access nested YAML/object properties with dot notation:
 Access array elements with index notation:
 
 ```yaml
-- define:
-    var: ITEMS
-    value: [a, b, c]
+- define: ITEMS
+  value: [a, b, c]
 - log: $ITEMS[0]
 ```
 

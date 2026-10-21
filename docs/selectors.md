@@ -18,8 +18,7 @@ BCL auto-detects selector type based on the string format:
 You can also explicitly specify the selector type:
 
 ```yaml
-type:
-  value: text
+- type: text
   target: //*[@id="input"]
 ```
 

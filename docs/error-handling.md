@@ -7,8 +7,7 @@ Actions can specify timeout and error handling callbacks.
 Set a timeout in milliseconds:
 
 ```yaml
-type:
-  value: text
+- type: text
   target: //*[@id="input"]
   timeout: 5000
 ```
@@ -18,8 +17,7 @@ type:
 Actions to execute if the main action fails:
 
 ```yaml
-type:
-  value: text
+- type: text
   target: //*[@id="input"]
   on_error:
     - log: Type action failed
@@ -31,15 +29,12 @@ type:
 Actions to execute if the action times out:
 
 ```yaml
-click:
-  target: //*[@id="slow-button"]
+- click: //*[@id="slow-button"]
   timeout: 3000
   on_timeout:
     - log: Click timed out
-    - wait:
-        duration: 1000
-    - click:
-        target: //*[@id="slow-button"]
+    - wait: 1000
+    - click: //*[@id="slow-button"]
 ```
 
 ## Action Chaining
@@ -47,8 +42,7 @@ click:
 Error handlers can contain multiple actions:
 
 ```yaml
-type:
-  value: text
+- type: text
   target: //*[@id="input"]
   on_error:
     - log: First error handler action

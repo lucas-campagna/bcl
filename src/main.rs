@@ -1,5 +1,5 @@
 use clap::Parser;
-use bcl::{parse_file, parse_stdin, Context, FlowRuntime, run_actions};
+use bcl::{parse_file, parse_stdin, parse_str, Context, FlowRuntime, run_actions};
 use serde::Serialize;
 use std::path::PathBuf;
 
@@ -21,6 +21,8 @@ pub enum Cli {
     },
     /// Compile a YAML flow file into a standalone shell script
     Compile(CompileArgs),
+    /// Execute one or more BCL browser actions
+    Exec(ExecArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -52,6 +54,19 @@ pub struct CompileArgs {
     /// If not provided, uses the YAML filename without extension
     #[arg(short, long)]
     pub name: Option<String>,
+}
+
+#[derive(Parser, Debug)]
+#[command(trailing_var_arg = true)]
+pub struct ExecArgs {
+    /// BCL action/value pairs, such as `goto URL click SELECTOR`
+    #[arg(
+        required = true,
+        num_args = 2..,
+        value_names = ["ACTION", "VALUE"],
+        allow_hyphen_values = true
+    )]
+    pub commands: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize)]
@@ -382,6 +397,57 @@ exec bcl run -t "$FLOW_NAME" - "${{EXTRA_ARGS[@]}}" <<< "$YAML_CONTENT"
     Ok(())
 }
 
+fn parse_exec_commands(args: &ExecArgs) -> anyhow::Result<bcl::FlowFile> {
+    if args.commands.len() % 2 != 0 {
+        return Err(anyhow::anyhow!(
+            "Exec expects action/value pairs, but received an action without a value"
+        ));
+    }
+
+    let actions = args
+        .commands
+        .chunks_exact(2)
+        .map(|pair| {
+            let mut action = serde_yaml::Mapping::new();
+            action.insert(
+                serde_yaml::Value::String(pair[0].clone()),
+                serde_yaml::Value::String(pair[1].clone()),
+            );
+            serde_yaml::Value::Mapping(action)
+        })
+        .collect();
+
+    let mut flow = serde_yaml::Mapping::new();
+    flow.insert(
+        serde_yaml::Value::String("main".to_string()),
+        serde_yaml::Value::Sequence(actions),
+    );
+
+    let yaml = serde_yaml::to_string(&serde_yaml::Value::Mapping(flow))?;
+    parse_str(&yaml).map_err(|e| anyhow::anyhow!("Invalid exec action: {}", e))
+}
+
+async fn exec_commands(args: &ExecArgs) -> anyhow::Result<()> {
+    let flow_file = parse_exec_commands(args)?;
+    let actions = flow_file
+        .get("main")
+        .ok_or_else(|| anyhow::anyhow!("No valid actions were provided"))?;
+    let mut context = Context::from_env();
+
+    run_actions(
+        &get_browser_url(),
+        actions,
+        &mut context,
+        false,
+        &flow_file,
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("Exec action failed: {}", e))?;
+
+    println!("OK");
+    Ok(())
+}
+
 fn main() {
     let args = Cli::parse();
 
@@ -398,6 +464,9 @@ fn main() {
         Cli::Compile(ref args) => {
             compile_flow(&args.yaml_path, args.name.as_deref())
         }
+        Cli::Exec(ref args) => tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(exec_commands(args)),
     };
 
     if let Err(e) = result {
@@ -408,7 +477,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, RunArgs};
+    use super::{parse_exec_commands, Cli, ExecArgs, RunArgs};
     use clap::Parser;
     use std::path::PathBuf;
 
@@ -435,5 +504,40 @@ mod tests {
                 _ => panic!("Expected run command"),
             }
         }
+    }
+
+    #[test]
+    fn exec_accepts_action_value_pairs() {
+        let cli = Cli::try_parse_from([
+            "bcl",
+            "exec",
+            "goto",
+            "https://example.com",
+            "click",
+            "#submit",
+        ])
+        .unwrap();
+
+        match cli {
+            Cli::Exec(args) => {
+                assert_eq!(args.commands, ["goto", "https://example.com", "click", "#submit"]);
+                let flow_file = parse_exec_commands(&args).unwrap();
+                assert_eq!(flow_file.get("main").unwrap().len(), 2);
+            }
+            _ => panic!("Expected exec command"),
+        }
+    }
+
+    #[test]
+    fn exec_rejects_unknown_actions_and_unpaired_values() {
+        let unknown = ExecArgs {
+            commands: vec!["not_an_action".to_string(), "value".to_string()],
+        };
+        assert!(parse_exec_commands(&unknown).is_err());
+
+        let unpaired = ExecArgs {
+            commands: vec!["goto".to_string()],
+        };
+        assert!(parse_exec_commands(&unpaired).is_err());
     }
 }

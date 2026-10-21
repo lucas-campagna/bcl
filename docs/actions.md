@@ -62,8 +62,7 @@ Type text into an element. The `target` field accepts CSS or XPath selectors (au
 Click an element:
 
 ```yaml
-- click:
-    target: //*[@id="submit"]
+- click: //*[@id="submit"]
 ```
 
 ### press
@@ -79,14 +78,11 @@ Press a keyboard key:
 Wait for conditions:
 
 ```yaml
-- wait:
-    url: https://example.com/dashboard
+- wait: https://example.com/dashboard
 # or
-- wait:
-    target: //*[@id="loaded"]
+- wait: //*[@id="loaded"]
 # or
-- wait:
-    duration: 5000
+- wait: 5000
 ```
 
 ### ask
@@ -103,8 +99,7 @@ Prompt user for input:
 Hover over an element:
 
 ```yaml
-- hover:
-    target: //*[@id="menu"]
+- hover: //*[@id="menu"]
 ```
 
 ### select
@@ -127,8 +122,7 @@ Select an option from a `<select>` dropdown:
 Check a checkbox or radio button:
 
 ```yaml
-- check:
-    target: //*[@id="terms"]
+- check: //*[@id="terms"]
 ```
 
 ### uncheck
@@ -136,8 +130,7 @@ Check a checkbox or radio button:
 Uncheck a checkbox:
 
 ```yaml
-- uncheck:
-    target: //*[@id="newsletter"]
+- uncheck: //*[@id="newsletter"]
 ```
 
 ### dblclick
@@ -145,8 +138,7 @@ Uncheck a checkbox:
 Double-click an element:
 
 ```yaml
-- dblclick:
-    target: //*[@id="edit-btn"]
+- dblclick: //*[@id="edit-btn"]
 ```
 
 ### right_click
@@ -154,8 +146,7 @@ Double-click an element:
 Right-click (context menu) an element:
 
 ```yaml
-- right_click:
-    target: //*[@id="row"]
+- right_click: //*[@id="row"]
 ```
 
 ### clear
@@ -163,8 +154,7 @@ Right-click (context menu) an element:
 Clear an input field:
 
 ```yaml
-- clear:
-    target: //*[@id="search"]
+- clear: //*[@id="search"]
 ```
 
 ### upload
@@ -195,13 +185,11 @@ Drag an element and drop it onto a target:
 Scroll an element into view (and optionally scroll by wheel):
 
 ```yaml
-- scroll:
-    target: //*[@id="section"]
+- scroll: //*[@id="section"]
 # with wheel scroll delta:
-- scroll:
-    target: //*[@id="section"]
-    x: 0
-    y: 200
+- scroll: //*[@id="section"]
+  x: 0
+  y: 200
 ```
 
 ### read
@@ -210,27 +198,23 @@ Read element text, HTML, an attribute, or an input value:
 
 ```yaml
 # read text content (default)
-- read:
-    target: //*[@id="result"]
-    to: RESULT
+- read: //*[@id="result"]
+  to: RESULT
 
 # read inner HTML
-- read:
-    target: //*[@id="content"]
-    to: HTML_CONTENT
-    html: true
+- read: //*[@id="content"]
+  to: HTML_CONTENT
+  html: true
 
 # read an element attribute
-- read:
-    target: //*[@id="link"]
-    to: LINK_HREF
-    attribute: href
+- read: //*[@id="link"]
+  to: LINK_HREF
+  attribute: href
 
 # read an input field's current value
-- read:
-    target: //*[@id="field"]
-    to: FIELD_VALUE
-    value: true
+- read: //*[@id="field"]
+  to: FIELD_VALUE
+  value: true
 ```
 
 ### log
@@ -263,10 +247,9 @@ Execute JavaScript:
 Define a variable:
 
 ```yaml
-- define:
-    var: MY_VAR
-    value: hello
-    overwrite: false
+- define: MY_VAR
+  value: hello
+  overwrite: false
 ```
 
 ### dialog
@@ -322,8 +305,7 @@ Loop while a condition is true:
     condition:
       xpath: //button[@id='more']
   do:
-    - click:
-        target: //button[@id='more']
+    - click: //button[@id='more']
   max: 50
 ```
 
@@ -412,7 +394,7 @@ Make HTTP requests. Supports all standard methods (GET, POST, PUT, DELETE, PATCH
 ```
 
 **Fields:**
-- `url` (required) — the URL to request
+- URL (required) — supplied as the value of `request`
 - `method` — HTTP method (default: GET)
 - `headers` — map of header names to values (variables supported)
 - `body` — request body (variables supported)

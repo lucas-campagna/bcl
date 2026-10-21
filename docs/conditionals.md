@@ -3,12 +3,12 @@
 Execute actions based on conditions:
 
 ```yaml
-if:
-  url: https://example.com/login
-then:
-  - click: #submit
-else:
-  - log: Already logged in
+- if:
+    url: https://example.com/login
+  then:
+    - click: #submit
+  else:
+    - log: Already logged in
 ```
 
 ## Condition Types
@@ -33,79 +33,79 @@ else:
 ### URL Condition
 
 ```yaml
-if:
-  url: https://example.com/login
-then:
-  - call: login
+- if:
+    url: https://example.com/login
+  then:
+    - call: login
 ```
 
 ### Existence Condition
 
 ```yaml
-if:
-  xpath: //*[@id="error-message"]
-then:
-  - log: Error detected
+- if:
+    xpath: //*[@id="error-message"]
+  then:
+    - log: Error detected
 ```
 
 ### Negation
 
 ```yaml
-if:
-  not:
-    defined: TOKEN
-then:
-  - ask: Please provide token
-    to: TOKEN
+- if:
+    not:
+      defined: TOKEN
+  then:
+    - ask: Please provide token
+      to: TOKEN
 ```
 
 ### Element Visible
 
 ```yaml
-if:
-  visible: "#loading-spinner"
-then:
-  - wait: 1000
+- if:
+    visible: "#loading-spinner"
+  then:
+    - wait: 1000
 ```
 
 ### Element Contains Text
 
 ```yaml
-if:
-  text:
-    target: "#message"
-    contains: "Success"
-then:
-  - log: Operation succeeded
+- if:
+    text:
+      target: "#message"
+      contains: "Success"
+  then:
+    - log: Operation succeeded
 ```
 
 ### Variable Equals
 
 ```yaml
-if:
-  equals:
-    var: $STATUS
-    value: ok
-then:
-  - log: All good
+- if:
+    equals:
+      var: $STATUS
+      value: ok
+  then:
+    - log: All good
 ```
 
 ### Combining Conditions
 
 ```yaml
-if:
-  and:
-    - visible: "#submit-btn"
-    - enabled: "#submit-btn"
-then:
-  - click: "#submit-btn"
+- if:
+    and:
+      - visible: "#submit-btn"
+      - enabled: "#submit-btn"
+  then:
+    - click: "#submit-btn"
 ```
 
 ```yaml
-if:
-  or:
-    - xpath: //button[@id='a']
-    - css: "#fallback"
-then:
-  - click: //button
+- if:
+    or:
+      - xpath: //button[@id='a']
+      - css: "#fallback"
+  then:
+    - click: //button
 ```

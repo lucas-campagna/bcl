@@ -896,6 +896,48 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
             let path = parse_string_value(first_val)?;
             Ok(Some(Action::Load { path }))
         }
+        "request" => {
+            let url = parse_string_value(first_val)?;
+            let mut method = "GET".to_string();
+            let mut headers = std::collections::HashMap::new();
+            let mut body = None;
+            let mut to = None;
+            let mut timeout = None;
+            let mut on_error = None;
+
+            for (key, val) in action_keys.iter().zip(action_values.iter()).skip(1) {
+                match key.as_str() {
+                    "method" => method = parse_string_value(val).unwrap_or_else(|_| "GET".to_string()),
+                    "headers" => {
+                        if let serde_yaml::Value::Mapping(headers_map) = val {
+                            for (header_key, header_value) in headers_map {
+                                if let (Ok(header_key), Ok(header_value)) = (
+                                    parse_string_value(header_key),
+                                    parse_string_value(header_value),
+                                ) {
+                                    headers.insert(header_key, header_value);
+                                }
+                            }
+                        }
+                    }
+                    "body" => body = parse_string_value(val).ok(),
+                    "to" => to = parse_string_value(val).ok(),
+                    "timeout" => timeout = parse_timeout_value(val),
+                    "on_error" => on_error = Some(parse_actions_from_value(val)),
+                    _ => {}
+                }
+            }
+
+            Ok(Some(Action::Request {
+                url,
+                method,
+                headers,
+                body,
+                to,
+                timeout,
+                on_error,
+            }))
+        }
         "server" => {
             let mut base_path = "/".to_string();
             let mut port: u16 = 8080;
@@ -1070,6 +1112,48 @@ auth:
                 assert!(tab.is_none());
             }
             _ => panic!("Expected Goto action"),
+        }
+    }
+
+    #[test]
+    fn test_parse_request_with_options() {
+        let yaml = r#"
+api:
+  - request: https://api.example.com/users
+    method: POST
+    headers:
+      Content-Type: application/json
+      Authorization: Bearer $TOKEN
+    body: '{"name": "test"}'
+    to: RESULT
+    timeout: 30000
+    on_error:
+      - log: Request failed
+"#;
+        let flow_file = parse_str(yaml).unwrap();
+        let actions = flow_file.get("api").unwrap();
+        assert_eq!(actions.len(), 1);
+
+        match &actions[0] {
+            Action::Request {
+                url,
+                method,
+                headers,
+                body,
+                to,
+                timeout,
+                on_error,
+            } => {
+                assert_eq!(url, "https://api.example.com/users");
+                assert_eq!(method, "POST");
+                assert_eq!(headers.get("Content-Type").unwrap(), "application/json");
+                assert_eq!(headers.get("Authorization").unwrap(), "Bearer $TOKEN");
+                assert_eq!(body.as_deref(), Some(r#"{"name": "test"}"#));
+                assert_eq!(to.as_deref(), Some("RESULT"));
+                assert_eq!(*timeout, Some(30000));
+                assert_eq!(on_error.as_ref().unwrap().len(), 1);
+            }
+            _ => panic!("Expected Request action"),
         }
     }
 
