@@ -59,15 +59,18 @@ pub struct CompileArgs {
 #[derive(Parser, Debug)]
 #[command(trailing_var_arg = true)]
 pub struct ExecArgs {
-    /// BCL action to execute
+    /// BCL action to execute (required unless --stdin is used)
     #[arg(value_name = "ACTION")]
-    pub action: String,
-    /// The action's primary value
+    pub action: Option<String>,
+    /// The action's primary value (required unless --stdin is used)
     #[arg(value_name = "VALUE")]
-    pub value: String,
+    pub value: Option<String>,
     /// Optional action parameters in `--name value` or `--name=value` form
     #[arg(value_name = "OPTION", num_args = 0.., allow_hyphen_values = true)]
     pub options: Vec<String>,
+    /// Read actions from stdin (one per line)
+    #[arg(long = "stdin", short = 's', help = "Read multiple actions from stdin, one per line")]
+    pub from_stdin: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize)]
@@ -438,31 +441,38 @@ fn parse_exec_scalar(action: &str, field: Option<&str>, value: &str) -> anyhow::
     Ok(serde_yaml::Value::String(value.to_string()))
 }
 
-fn parse_exec_action(args: &ExecArgs) -> anyhow::Result<bcl::FlowFile> {
-    let action_name = &args.action;
-    let value = &args.value;
+fn parse_action_line(line: &str) -> anyhow::Result<serde_yaml::Mapping> {
+    // Parse line with support for quoted strings
+    let parts = parse_shell_words(line)?;
+    if parts.is_empty() {
+        return Err(anyhow::anyhow!("Empty action line"));
+    }
+    let action_name = &parts[0];
+    let value = parts.get(1).map(|s| s.as_str()).unwrap_or("");
+    let options: Vec<&str> = parts[2..].iter().map(|s| s.as_str()).collect();
+
     let mut action = serde_yaml::Mapping::new();
     action.insert(
-        serde_yaml::Value::String(action_name.clone()),
+        serde_yaml::Value::String(action_name.to_string()),
         parse_exec_scalar(action_name, None, value)?,
     );
 
     let mut index = 0;
-    while index < args.options.len() {
-        let option = args.options[index]
+    while index < options.len() {
+        let option = options[index]
             .strip_prefix("--")
-            .ok_or_else(|| anyhow::anyhow!("Expected an option beginning with '--', got {:?}", args.options[index]))?;
+            .ok_or_else(|| anyhow::anyhow!("Expected an option beginning with '--', got {:?}", options[index]))?;
         if option.is_empty() {
             return Err(anyhow::anyhow!("Expected an option name after '--'"));
         }
 
-        let (field, field_value, consumed) = if let Some((field, value)) = option.split_once('=') {
-            (field, value, 1)
+        let (field, field_value, consumed) = if let Some((field, val)) = option.split_once('=') {
+            (field, val, 1)
         } else {
-            let value = args.options.get(index + 1).ok_or_else(|| {
+            let val = options.get(index + 1).ok_or_else(|| {
                 anyhow::anyhow!("Option '--{}' requires a value", option)
             })?;
-            (option, value.as_str(), 2)
+            (option, *val, 2)
         };
         if field.is_empty() {
             return Err(anyhow::anyhow!("Expected an option name after '--'"));
@@ -476,10 +486,113 @@ fn parse_exec_action(args: &ExecArgs) -> anyhow::Result<bcl::FlowFile> {
         index += consumed;
     }
 
+    Ok(action)
+}
+
+fn parse_shell_words(s: &str) -> anyhow::Result<Vec<String>> {
+    let mut result = Vec::new();
+    let mut current = String::new();
+    let mut chars = s.chars().peekable();
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' if !in_double_quote => {
+                in_single_quote = !in_single_quote;
+            }
+            '"' if !in_single_quote => {
+                in_double_quote = !in_double_quote;
+            }
+            c if c.is_whitespace() && !in_single_quote && !in_double_quote => {
+                if !current.is_empty() {
+                    result.push(current);
+                    current = String::new();
+                }
+            }
+            c => {
+                current.push(c);
+            }
+        }
+    }
+
+    if in_single_quote {
+        return Err(anyhow::anyhow!("Unclosed single quote"));
+    }
+    if in_double_quote {
+        return Err(anyhow::anyhow!("Unclosed double quote"));
+    }
+
+    if !current.is_empty() {
+        result.push(current);
+    }
+
+    Ok(result)
+}
+
+fn parse_exec_action(args: &ExecArgs) -> anyhow::Result<bcl::FlowFile> {
+    let mut actions = Vec::new();
+
+    if args.from_stdin {
+        use std::io::{self, BufRead};
+        let stdin = io::stdin();
+        for (line_num, line) in stdin.lock().lines().enumerate() {
+            let line = line?;
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let action = parse_action_line(line)
+                .map_err(|e| anyhow::anyhow!("Line {}: {}", line_num + 1, e))?;
+            actions.push(serde_yaml::Value::Mapping(action));
+        }
+        if actions.is_empty() {
+            return Err(anyhow::anyhow!("No actions provided via stdin"));
+        }
+    } else {
+        let action_name = args.action.as_deref().unwrap_or("");
+        let value = args.value.as_deref().unwrap_or("");
+        let mut action = serde_yaml::Mapping::new();
+        action.insert(
+            serde_yaml::Value::String(action_name.to_string()),
+            parse_exec_scalar(action_name, None, value)?,
+        );
+
+        let mut index = 0;
+        while index < args.options.len() {
+            let option = args.options[index]
+                .strip_prefix("--")
+                .ok_or_else(|| anyhow::anyhow!("Expected an option beginning with '--', got {:?}", args.options[index]))?;
+            if option.is_empty() {
+                return Err(anyhow::anyhow!("Expected an option name after '--'"));
+            }
+
+            let (field, field_value, consumed) = if let Some((field, val)) = option.split_once('=') {
+                (field, val, 1)
+            } else {
+                let val = args.options.get(index + 1).ok_or_else(|| {
+                    anyhow::anyhow!("Option '--{}' requires a value", option)
+                })?;
+                (option, val.as_str(), 2)
+            };
+            if field.is_empty() {
+                return Err(anyhow::anyhow!("Expected an option name after '--'"));
+            }
+
+            let field = field.replace('-', "_");
+            action.insert(
+                serde_yaml::Value::String(field.clone()),
+                parse_exec_scalar(action_name, Some(&field), field_value)?,
+            );
+            index += consumed;
+        }
+        actions.push(serde_yaml::Value::Mapping(action));
+    }
+
     let mut flow = serde_yaml::Mapping::new();
     flow.insert(
         serde_yaml::Value::String("main".to_string()),
-        serde_yaml::Value::Sequence(vec![serde_yaml::Value::Mapping(action)]),
+        serde_yaml::Value::Sequence(actions),
     );
 
     let yaml = serde_yaml::to_string(&serde_yaml::Value::Mapping(flow))?;
@@ -491,6 +604,7 @@ async fn exec_action(args: &ExecArgs) -> anyhow::Result<()> {
     let actions = flow_file
         .get("main")
         .ok_or_else(|| anyhow::anyhow!("No valid actions were provided"))?;
+    
     let mut context = Context::from_env();
 
     run_actions(
