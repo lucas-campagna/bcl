@@ -1,0 +1,87 @@
+# Shadow DOM & Iframe Tests
+main:
+  - goto: file://$ASSETS_DIR/shadow.html
+    wait_until: load
+  
+  # Test shadow DOM via JS
+  - js: |
+      const host1 = document.getElementById('shadow-host');
+      const shadow1 = host1.shadowRoot;
+      if (!shadow1) 'NO_SHADOW';
+      const el1 = shadow1.querySelector('.shadow-content');
+      el1 ? el1.textContent : 'NOT_FOUND';
+    to: SHADOW_CONTENT
+  - assert:
+      condition:
+        equals:
+          var: $SHADOW_CONTENT
+          value: "Shadow DOM Content"
+  
+  # Type in shadow input
+  - js: |
+      const host2 = document.getElementById('shadow-host');
+      const input2 = host2.shadowRoot.querySelector('#shadow-input');
+      input2.value = 'shadow typed';
+      input2.dispatchEvent(new Event('input', {bubbles: true}));
+      input2.value;
+    to: SHADOW_INPUT
+  - assert:
+      condition:
+        equals:
+          var: $SHADOW_INPUT
+          value: "shadow typed"
+  
+  # Click shadow button
+  - js: |
+      const host3 = document.getElementById('shadow-host');
+      host3.shadowRoot.querySelector('#shadow-btn').click();
+      'clicked';
+    to: SHADOW_CLICK
+  - read: //*[@id="output"]
+    to: SHADOW_OUTPUT
+  - assert:
+      condition:
+        text:
+          target: "//*[@id='output']"
+          contains: "shadow typed"
+  
+  # Test iframe
+  - js: |
+      const iframe1 = document.getElementById('test-iframe');
+      iframe1.contentDocument.body.querySelector('.iframe-content').textContent;
+    to: IFRAME_CONTENT
+  - assert:
+      condition:
+        equals:
+          var: $IFRAME_CONTENT
+          value: "Content inside iframe"
+  
+  # Type in iframe
+  - js: |
+      const iframe2 = document.getElementById('test-iframe');
+      const input2 = iframe2.contentDocument.getElementById('iframe-input');
+      input2.value = 'iframe typed';
+      input2.dispatchEvent(new Event('input', {bubbles: true}));
+      input2.value;
+    to: IFRAME_INPUT
+  - assert:
+      condition:
+        equals:
+          var: $IFRAME_INPUT
+          value: "iframe typed"
+  
+  # Click iframe button
+  - js: |
+      const iframe3 = document.getElementById('test-iframe');
+      iframe3.contentDocument.getElementById('iframe-btn').click();
+      'clicked';
+    to: IFRAME_CLICK
+  - js: |
+      const iframe4 = document.getElementById('test-iframe');
+      iframe4.contentDocument.body.getAttribute('data-clicked');
+    to: IFRAME_CLICKED
+  - assert:
+      condition:
+        equals:
+          var: $IFRAME_CLICKED
+          value: "true"

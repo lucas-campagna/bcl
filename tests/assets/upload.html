@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+<head>
+  <title>Upload Test Page</title>
+  <meta charset="utf-8">
+</head>
+<body>
+  <h1>Upload Test</h1>
+  
+  <div>
+    <label for="single-file">Single File:</label>
+    <input type="file" id="single-file" name="single">
+  </div>
+  
+  <div>
+    <label for="multi-file">Multiple Files:</label>
+    <input type="file" id="multi-file" name="multi" multiple>
+  </div>
+  
+  <div id="output"></div>
+  
+  <script>
+    function updateOutput(inputId, outputId) {
+      const input = document.getElementById(inputId);
+      input.addEventListener('change', () => {
+        const files = Array.from(input.files);
+        const output = document.getElementById(outputId);
+        output.textContent = files.map(f => `${f.name} (${f.size} bytes)`).join('\n');
+      });
+    }
+    updateOutput('single-file', 'output');
+    updateOutput('multi-file', 'output');
+  </script>
+</body>
+</html>

@@ -1,0 +1,31 @@
+# Drag & Drop Tests
+main:
+  - goto: file://$ASSETS_DIR/dragdrop.html
+    wait_until: load
+  
+  # Drag and drop
+  - drag: //*[@id="drag-source"]
+    to: //*[@id="drop-target"]
+  
+  # Verify drop happened
+  - read: //*[@id="drop-target"]
+    to: DROP_RESULT
+  - assert:
+      condition:
+        text:
+          target: "//*[@id='drop-target']"
+          contains: "Dropped: dragged-content"
+  
+  # Check log
+  - read: //*[@id="log"]
+    to: LOG_CONTENT
+  - assert:
+      condition:
+        text:
+          target: "//*[@id='log']"
+          contains: "dragstart"
+  - assert:
+      condition:
+        text:
+          target: "//*[@id='log']"
+          contains: "drop"

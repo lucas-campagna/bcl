@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+<head>
+  <title>Iframe Content</title>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: sans-serif; padding: 10px; background: #f0f0f0; }
+    .iframe-content { color: green; }
+  </style>
+</head>
+<body>
+  <div class="iframe-content">Content inside iframe</div>
+  <input type="text" id="iframe-input" placeholder="Iframe input">
+  <button id="iframe-btn">Iframe Button</button>
+  
+  <script>
+    document.getElementById('iframe-btn').addEventListener('click', () => {
+      const input = document.getElementById('iframe-input');
+      // Communicate to parent via postMessage or DOM
+      document.body.setAttribute('data-clicked', 'true');
+      document.body.setAttribute('data-input', input.value);
+    });
+  </script>
+</body>
+</html>

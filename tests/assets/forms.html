@@ -1,0 +1,80 @@
+<!doctype html>
+<html>
+<head>
+  <title>Form Test Page</title>
+  <meta charset="utf-8">
+</head>
+<body>
+  <h1>Form Test</h1>
+  
+  <form id="test-form">
+    <div>
+      <label for="text-input">Text Input:</label>
+      <input type="text" id="text-input" name="text" value="initial">
+    </div>
+    <div>
+      <label for="password-input">Password:</label>
+      <input type="password" id="password-input" name="password" value="secret">
+    </div>
+    <div>
+      <label for="textarea">Textarea:</label>
+      <textarea id="textarea" name="textarea">Initial textarea content</textarea>
+    </div>
+    <div>
+      <label for="checkbox1">Checkbox 1:</label>
+      <input type="checkbox" id="checkbox1" name="check1" value="1">
+    </div>
+    <div>
+      <label for="checkbox2">Checkbox 2:</label>
+      <input type="checkbox" id="checkbox2" name="check2" value="2" checked>
+    </div>
+    <div>
+      <label for="radio1">Radio 1:</label>
+      <input type="radio" id="radio1" name="radio" value="a">
+      <label for="radio2">Radio 2:</label>
+      <input type="radio" id="radio2" name="radio" value="b" checked>
+    </div>
+    <div>
+      <label for="select">Select:</label>
+      <select id="select" name="select">
+        <option value="opt1">Option 1</option>
+        <option value="opt2" selected>Option 2</option>
+        <option value="opt3">Option 3</option>
+      </select>
+    </div>
+    <div>
+      <label for="multi-select">Multi Select:</label>
+      <select id="multi-select" name="multi" multiple>
+        <option value="m1">Multi 1</option>
+        <option value="m2" selected>Multi 2</option>
+        <option value="m3" selected>Multi 3</option>
+      </select>
+    </div>
+    <div>
+      <label for="file-input">File Input:</label>
+      <input type="file" id="file-input" name="file">
+    </div>
+    <button type="button" id="submit-btn">Submit</button>
+    <button type="button" id="reset-btn">Reset</button>
+  </form>
+  
+  <div id="output"></div>
+  
+  <script>
+    document.getElementById('submit-btn').addEventListener('click', () => {
+      const form = document.getElementById('test-form');
+      const data = new FormData(form);
+      let output = 'Form submitted:\n';
+      for (const [key, value] of data.entries()) {
+        output += `${key}=${value}\n`;
+      }
+      document.getElementById('output').textContent = output;
+    });
+    
+    document.getElementById('reset-btn').addEventListener('click', () => {
+      document.getElementById('test-form').reset();
+      document.getElementById('output').textContent = 'Form reset';
+    });
+  </script>
+</body>
+</html>

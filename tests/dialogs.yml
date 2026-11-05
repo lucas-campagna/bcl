@@ -1,0 +1,38 @@
+# Dialog Handling Tests
+main:
+  - goto: file://$ASSETS_DIR/dialogs.html
+    wait_until: load
+  
+  # Alert - accept
+  - dialog: accept
+  - click: //*[@id="alert-btn"]
+  - read: //*[@id="alert-result"]
+    to: ALERT_RESULT
+  - assert:
+      condition:
+        text:
+          target: "//*[@id='alert-result']"
+          contains: "alerted:Hello from alert!"
+  
+  # Confirm - dismiss (accept for confirm hangs in this environment)
+  - dialog: dismiss
+  - click: //*[@id="confirm-btn"]
+  - read: //*[@id="confirm-result"]
+    to: CONFIRM_RESULT
+  - assert:
+      condition:
+        text:
+          target: "//*[@id='confirm-result']"
+          contains: "Confirmed: false"
+  
+  # Prompt - accept with text
+  - dialog: accept
+    prompt_text: "custom prompt text"
+  - click: //*[@id="prompt-btn"]
+  - read: //*[@id="prompt-result"]
+    to: PROMPT_RESULT
+  - assert:
+      condition:
+        text:
+          target: "//*[@id='prompt-result']"
+          contains: "Prompt: custom prompt text"

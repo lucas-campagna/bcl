@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+<head>
+  <title>Dialog Test Page</title>
+  <meta charset="utf-8">
+</head>
+<body>
+  <h1>Dialog Tests</h1>
+  
+  <button id="alert-btn" onclick="alert('Hello from alert!')">Trigger Alert</button>
+  <button id="confirm-btn" onclick="document.getElementById('confirm-result').textContent = 'Confirmed: ' + confirm('Are you sure?')">Trigger Confirm</button>
+  <button id="prompt-btn" onclick="document.getElementById('prompt-result').textContent = 'Prompt: ' + prompt('Enter something:', 'default')">Trigger Prompt</button>
+  
+  <div id="alert-result">No alert yet</div>
+  <div id="confirm-result">No confirm yet</div>
+  <div id="prompt-result">No prompt yet</div>
+  
+  <script>
+    window.alert = function(msg) {
+      document.getElementById('alert-result').textContent = 'alerted:' + msg;
+      return window.originalAlert(msg);
+    };
+    window.originalAlert = window.alert;
+    // Keep confirm and prompt as native for CDP dialog handling
+  </script>
+</body>
+</html>

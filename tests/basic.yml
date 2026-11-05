@@ -1,0 +1,64 @@
+# Basic Navigation and Reading Tests
+main:
+  - goto: file://$ASSETS_DIR/basic.html
+    wait_until: load
+  - js: document.title
+    to: TITLE
+  - log: "Title: $TITLE"
+  - assert:
+      condition:
+        equals:
+          var: $TITLE
+          value: "Basic Test Page"
+  
+  # Read by XPath
+  - read: //h1[@id="main-heading"]
+    to: HEADING
+  - assert:
+      condition:
+        equals:
+          var: $HEADING
+          value: "Main Heading"
+  
+  # Read by CSS (using class/id)
+  - read: //p[@id="para1"]
+    to: PARA1
+  - assert:
+      condition:
+        equals:
+          var: $PARA1
+          value: "First paragraph."
+  
+  # Read HTML content
+  - read: //p[@id="para2"]
+    html: true
+    to: PARA2_HTML
+  - assert:
+      condition:
+        text:
+          target: "//p[@id='para2']"
+          contains: "Second paragraph"
+  
+  # Read attribute
+  - read: //a
+    attribute: href
+    to: LINK_HREF
+  - assert:
+      condition:
+        equals:
+          var: $LINK_HREF
+          value: "/link"
+  
+  # Count elements
+  - js: document.querySelectorAll('.item').length
+    to: ITEM_COUNT
+  - assert:
+      condition:
+        equals:
+          var: $ITEM_COUNT
+          value: "3"
+  
+  # Read list items
+  - read: //ul[@id="list"]/li
+    to: LIST_ITEMS
+  - log: "List: $LIST_ITEMS"

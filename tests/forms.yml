@@ -1,0 +1,118 @@
+# Form Interaction Tests
+main:
+  - goto: file://$ASSETS_DIR/forms.html
+    wait_until: load
+  
+  # Text input
+  - type: "new text value"
+    target: //*[@id="text-input"]
+  - read: //*[@id="text-input"]
+    value: true
+    to: TEXT_VAL
+  - assert:
+      condition:
+        equals:
+          var: $TEXT_VAL
+          value: "new text value"
+  
+  # Clear input
+  - clear: //*[@id="text-input"]
+  - read: //*[@id="text-input"]
+    value: true
+    to: CLEARED
+  - assert:
+      condition:
+        equals:
+          var: $CLEARED
+          value: ""
+  
+  # Type again
+  - type: "typed again"
+    target: //*[@id="text-input"]
+  
+  # Password input (secret)
+  - type: "newpassword"
+    target: //*[@id="password-input"]
+    secret: true
+  - read: //*[@id="password-input"]
+    value: true
+    to: PASS_VAL
+  - assert:
+      condition:
+        equals:
+          var: $PASS_VAL
+          value: "newpassword"
+  
+  # Textarea
+  - type: "new textarea content"
+    target: //*[@id="textarea"]
+  - read: //*[@id="textarea"]
+    value: true
+    to: TEXTAREA_VAL
+  - assert:
+      condition:
+        equals:
+          var: $TEXTAREA_VAL
+          value: "new textarea content"
+  
+  # Checkbox - check
+  - check: //*[@id="checkbox1"]
+  - js: document.getElementById('checkbox1').checked
+    to: CHECK1
+  - assert:
+      condition:
+        equals:
+          var: $CHECK1
+          value: "true"
+  
+  # Checkbox - uncheck
+  - uncheck: //*[@id="checkbox2"]
+  - js: document.getElementById('checkbox2').checked
+    to: CHECK2
+  - assert:
+      condition:
+        equals:
+          var: $CHECK2
+          value: "false"
+  
+  # Radio buttons
+  - click: //*[@id="radio1"]
+  - js: document.getElementById('radio1').checked
+    to: RADIO1
+  - assert:
+      condition:
+        equals:
+          var: $RADIO1
+          value: "true"
+  
+  # Select single
+  - select: "opt3"
+    target: //*[@id="select"]
+  - read: //*[@id="select"]
+    value: true
+    to: SEL_VAL
+  - assert:
+      condition:
+        equals:
+          var: $SEL_VAL
+          value: "opt3"
+  
+  # Form submit via click
+  - click: //*[@id="submit-btn"]
+  - read: //*[@id="output"]
+    to: SUBMIT_OUT
+  - assert:
+      condition:
+        text:
+          target: "//*[@id='output']"
+          contains: "text=typed again"
+  
+  # Reset form
+  - click: //*[@id="reset-btn"]
+  - read: //*[@id="output"]
+    to: RESET_OUT
+  - assert:
+      condition:
+        equals:
+          var: $RESET_OUT
+          value: "Form reset"

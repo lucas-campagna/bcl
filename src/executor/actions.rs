@@ -351,6 +351,7 @@ pub async fn run_actions(
                 let prompt = prompt_text.clone();
                 let timeout_ms = timeout.unwrap_or(5000);
                 tokio::spawn(async move {
+                    tokio::task::yield_now().await;
                     match page_clone.wait_for_dialog(timeout_ms).await {
                         Ok(dialog) => {
                             match mode_str.as_str() {

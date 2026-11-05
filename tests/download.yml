@@ -1,0 +1,40 @@
+# Download Tests
+main:
+  - goto: file://$ASSETS_DIR/download.html
+    wait_until: load
+  
+  # Download text file
+  - download: "$TMP_DIR/downloaded.txt"
+    timeout: 10000
+    to: DOWNLOAD_PATH
+  - click: //*[@id="download-link"]
+  - log: "Text file downloaded to $DOWNLOAD_PATH"
+  
+  # Verify download via JS (read file content via blob URL)
+  - js: |
+      const response = await fetch(document.getElementById('download-link').href);
+      return await response.text();
+    to: DOWNLOAD_CONTENT
+  - assert:
+      condition:
+        text:
+          target: "//*[@id='download-link']"
+          contains: "Hello, this is a test download"
+  
+  # Download JSON
+  - download: "$TMP_DIR/data.json"
+    timeout: 10000
+    to: JSON_PATH
+  - click: //*[@id="download-json"]
+  - log: "JSON file downloaded to $JSON_PATH"
+  
+  # Verify JSON download
+  - js: |
+      const response = await fetch(document.getElementById('download-json').href);
+      return await response.json();
+    to: JSON_DATA
+  - assert:
+      condition:
+        equals:
+          var: $JSON_DATA
+          value: '{"test":true,"items":[1,2,3],"message":"Downloaded via BCL"}'

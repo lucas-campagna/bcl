@@ -1,0 +1,33 @@
+# File Upload Tests
+main:
+  - goto: file://$ASSETS_DIR/upload.html
+    wait_until: load
+  
+  # Single file upload
+  - upload: "$ASSETS_DIR/basic.html"
+    target: //*[@id="single-file"]
+  - read: //*[@id="output"]
+    to: UPLOAD1
+  - assert:
+      condition:
+        text:
+          target: "//*[@id='output']"
+          contains: "basic.html"
+  
+  # Multiple file upload
+  - upload:
+      - "$ASSETS_DIR/basic.html"
+      - "$ASSETS_DIR/forms.html"
+    target: //*[@id="multi-file"]
+  - read: //*[@id="output"]
+    to: UPLOAD2
+  - assert:
+      condition:
+        text:
+          target: "//*[@id='output']"
+          contains: "basic.html"
+  - assert:
+      condition:
+        text:
+          target: "//*[@id='output']"
+          contains: "forms.html"

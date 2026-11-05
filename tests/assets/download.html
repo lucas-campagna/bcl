@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+<head>
+  <title>Download Test Page</title>
+  <meta charset="utf-8">
+</head>
+<body>
+  <h1>Download Test</h1>
+  
+  <a id="download-link" href="test-download.txt" download="downloaded.txt">Download Text File</a>
+  <a id="download-json" href="test.json" download="data.json">Download JSON</a>
+  
+  <script>
+    // Create blob downloads
+    document.getElementById('download-link').addEventListener('click', (e) => {
+      const blob = new Blob(['Hello, this is a test download!\nLine 2\nLine 3'], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      e.target.href = url;
+    });
+    
+    document.getElementById('download-json').addEventListener('click', (e) => {
+      const data = { test: true, items: [1, 2, 3], message: 'Downloaded via BCL' };
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      e.target.href = url;
+    });
+  </script>
+</body>
+</html>

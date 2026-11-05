@@ -290,6 +290,26 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
                 if let Some(ms) = n.as_u64() {
                     duration = Some(ms);
                 }
+            } else if let serde_yaml::Value::Mapping(map) = first_val {
+                for (k, v) in map {
+                    if let serde_yaml::Value::String(key_str) = k {
+                        match key_str.as_str() {
+                            "url" => url = parse_string_value(v).ok(),
+                            "target" => target = parse_string_value(v).ok(),
+                            "duration" => {
+                                if let serde_yaml::Value::Number(n) = v {
+                                    duration = n.as_u64();
+                                }
+                            }
+                            "timeout" => timeout = parse_timeout_value(v),
+                            "on_error" => on_error = Some(parse_actions_from_value(v)),
+                            "on_timeout" => on_timeout = Some(parse_actions_from_value(v)),
+                            "shadow_root" => shadow_root = parse_selector_path_value(v),
+                            "iframe" => iframe = parse_selector_path_value(v),
+                            _ => {}
+                        }
+                    }
+                }
             }
             for (key, val) in action_keys.iter().zip(action_values.iter()).skip(1) {
                 match key.as_str() {
@@ -466,7 +486,7 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
             Ok(Some(Action::Define { var, value, overwrite }))
         }
         "select" => {
-            let value = parse_string_value(first_val)?;
+            let mut value = String::new();
             let mut target = None;
             let mut values = Vec::new();
             let mut timeout = None;
@@ -474,6 +494,35 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
             let mut on_timeout = None;
             let mut shadow_root = None;
             let mut iframe = None;
+
+            // Handle first_val - can be string, sequence, or mapping
+            if let Ok(s) = parse_string_value(first_val) {
+                value = s;
+            } else if let serde_yaml::Value::Sequence(seq) = first_val {
+                values = seq.iter().filter_map(|v| parse_string_value(v).ok()).collect();
+            } else if let serde_yaml::Value::Mapping(map) = first_val {
+                for (k, v) in map {
+                    if let serde_yaml::Value::String(key_str) = k {
+                        match key_str.as_str() {
+                            "value" => value = parse_string_value(v).unwrap_or_default(),
+                            "values" => {
+                                if let serde_yaml::Value::Sequence(seq) = v {
+                                    values = seq.iter().filter_map(|v| parse_string_value(v).ok()).collect();
+                                }
+                            }
+                            "target" => target = parse_string_value(v).ok(),
+                            "timeout" => timeout = parse_timeout_value(v),
+                            "on_error" => on_error = Some(parse_actions_from_value(v)),
+                            "on_timeout" => on_timeout = Some(parse_actions_from_value(v)),
+                            "shadow_root" => shadow_root = parse_selector_path_value(v),
+                            "iframe" => iframe = parse_selector_path_value(v),
+                            _ => {}
+                        }
+                    }
+                }
+            }
+
+            // Also process remaining keys
             for (key, val) in action_keys.iter().zip(action_values.iter()).skip(1) {
                 match key.as_str() {
                     "target" => target = parse_string_value(val).ok(),
@@ -481,7 +530,7 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
                         if let serde_yaml::Value::Sequence(seq) = val {
                             values = seq.iter().filter_map(|v| parse_string_value(v).ok()).collect();
                         } else if let Ok(s) = parse_string_value(val) {
-                            values = vec![s];
+                            values.push(s);
                         }
                     }
                     "timeout" => timeout = parse_timeout_value(val),

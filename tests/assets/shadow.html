@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+<head>
+  <title>Shadow DOM & Iframe Test</title>
+  <meta charset="utf-8">
+</head>
+<body>
+  <h1>Shadow DOM & Iframe Test</h1>
+  
+  <div id="shadow-host">Shadow host (no shadow yet)</div>
+  
+  <iframe id="test-iframe" src="iframe-content.html" width="400" height="200"></iframe>
+  
+  <div id="output"></div>
+  
+  <script>
+    // Create shadow DOM
+    const host = document.getElementById('shadow-host');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = `
+      <style>
+        .shadow-content { color: red; font-weight: bold; }
+        .nested { color: blue; }
+      </style>
+      <div class="shadow-content">Shadow DOM Content</div>
+      <div class="nested">
+        <span class="deep">Deep nested</span>
+      </div>
+      <input type="text" id="shadow-input" placeholder="Shadow input">
+      <button id="shadow-btn">Shadow Button</button>
+    `;
+    
+    shadow.getElementById('shadow-btn').addEventListener('click', () => {
+      const input = shadow.getElementById('shadow-input');
+      document.getElementById('output').textContent = 'Shadow button clicked, input: ' + input.value;
+    });
+  </script>
+</body>
+</html>

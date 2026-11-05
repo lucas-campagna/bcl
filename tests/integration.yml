@@ -1,0 +1,84 @@
+# Comprehensive Integration Test
+main:
+  - goto: file://$ASSETS_DIR/basic.html
+    wait_until: load
+  
+  # Store initial URL
+  - js: window.location.href
+    to: INITIAL_URL
+  - log: "Started at: $INITIAL_URL"
+  
+  # Navigate to forms
+  - goto: file://$ASSETS_DIR/forms.html
+    wait_until: load
+  - js: window.location.href
+    to: FORMS_URL
+  - assert:
+      condition:
+        url: "forms.html"
+  
+  # Fill form
+  - type: "integration test"
+    target: //*[@id="text-input"]
+  - check: //*[@id="checkbox1"]
+  - select: "opt1"
+    target: //*[@id="select"]
+  
+  # Submit
+  - click: //*[@id="submit-btn"]
+  
+  # Verify output
+  - read: //*[@id="output"]
+    to: FORM_OUTPUT
+  - assert:
+      condition:
+        text:
+          target: "//*[@id='output']"
+          contains: "integration test"
+  - assert:
+      condition:
+        text:
+          target: "//*[@id='output']"
+          contains: "check1=1"
+  - assert:
+      condition:
+        text:
+          target: "//*[@id='output']"
+          contains: "select=opt1"
+  
+  # Navigate to drag-drop
+  - goto: file://$ASSETS_DIR/dragdrop.html
+    wait_until: load
+  
+  # Perform drag-drop
+  - drag: //*[@id="drag-source"]
+    to: //*[@id="drop-target"]
+  - read: //*[@id="drop-target"]
+    to: DROP_RESULT
+  - assert:
+      condition:
+        text:
+          target: "//*[@id='drop-target']"
+          contains: "Dropped: dragged-content"
+  
+  # Go back to basic page
+  - goto: file://$ASSETS_DIR/basic.html
+    wait_until: load
+  
+  # Final verification
+  - read: //h1[@id="main-heading"]
+    to: FINAL_HEADING
+  - assert:
+      condition:
+        equals:
+          var: $FINAL_HEADING
+          value: "Main Heading"
+  
+  # Log all collected data
+  - log: "=== Test Summary ==="
+  - log: "Initial URL: $INITIAL_URL"
+  - log: "Forms URL: $FORMS_URL"
+  - log: "Form Output: $FORM_OUTPUT"
+  - log: "Drop Result: $DROP_RESULT"
+  - log: "Final Heading: $FINAL_HEADING"
+  - log: "=== All Tests Passed ==="
