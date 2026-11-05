@@ -763,23 +763,26 @@ mod tests {
     #[test]
     fn exec_rejects_unknown_actions_and_missing_option_values() {
         let unknown = ExecArgs {
-            action: "not_an_action".to_string(),
-            value: "value".to_string(),
+            action: Some("not_an_action".to_string()),
+            value: Some("value".to_string()),
             options: vec![],
+            from_stdin: false,
         };
         assert!(parse_exec_action(&unknown).is_err());
 
         let missing_option_value = ExecArgs {
-            action: "read".to_string(),
-            value: "//body".to_string(),
+            action: Some("read".to_string()),
+            value: Some("//body".to_string()),
             options: vec!["--html".to_string()],
+            from_stdin: false,
         };
         assert!(parse_exec_action(&missing_option_value).is_err());
 
         let chained = ExecArgs {
-            action: "read".to_string(),
-            value: "//body".to_string(),
+            action: Some("read".to_string()),
+            value: Some("//body".to_string()),
             options: vec!["click".to_string(), "#submit".to_string()],
+            from_stdin: false,
         };
         assert!(parse_exec_action(&chained).is_err());
     }
