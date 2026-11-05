@@ -2,7 +2,7 @@ use crate::error::Error;
 use crate::flow::{Action, Condition, Context, FlowFile, Selector, SelectorPath, TabTarget};
 use crate::executor::selector;
 use crate::executor::utils::{get_timeout, parse_builtin_variables, ensure_page_initialized};
-use ferridriver::options::{InputFiles, SelectOptionOptions, SelectOptionValue, SetInputFilesOptions};
+use crate::cdp::options::{InputFiles, SelectOptionOptions, SelectOptionValue, SetInputFilesOptions};
 use reqwest::Client;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -46,10 +46,10 @@ async fn handle_action_error(
 }
 
 async fn resolve_page_for_tab(
-    browser: &ferridriver::Browser,
+    browser: &crate::cdp::Browser,
     tab_target: TabTarget,
     verbose: bool,
-) -> Result<Arc<ferridriver::Page>, Error> {
+) -> Result<Arc<crate::cdp::Page>, Error> {
     match tab_target {
         TabTarget::New => {
             if verbose {
@@ -93,25 +93,13 @@ pub async fn run_actions(
     verbose: bool,
     flows: &FlowFile,
 ) -> Result<(), Error> {
-    let browser = if ws_url.starts_with("ws://") || ws_url.starts_with("wss://") {
-        if verbose {
-            eprintln!("[CONN] Using WebSocket connect: {}", ws_url);
-        }
-        ferridriver::chromium()
-            .connect(ws_url, ferridriver::options::ConnectOptions::default())
-            .await
-    } else {
-        if verbose {
-            eprintln!("[CONN] Using CDP connect_over_cdp: {}", ws_url);
-        }
-        ferridriver::chromium()
-            .connect_over_cdp(
-                ws_url,
-                ferridriver::options::ConnectOverCdpOptions::default(),
-            )
-            .await
+    if verbose {
+        eprintln!("[CONN] Connecting to browser: {}", ws_url);
     }
-    .map_err(|e| Error::ConnectionFailed(format!("Failed to connect to browser: {}", e)))?;
+
+    let browser = crate::cdp::connect(ws_url)
+        .await
+        .map_err(|e| Error::ConnectionFailed(format!("Failed to connect to browser: {}", e)))?;
 
     let browser = Arc::new(browser);
 
@@ -120,7 +108,7 @@ pub async fn run_actions(
         .await
         .map_err(|e| Error::ConnectionFailed(format!("Failed to get page: {}", e)))?;
 
-    let page: Rc<RefCell<Arc<ferridriver::Page>>> = Rc::new(RefCell::new(page));
+    let page: Rc<RefCell<Arc<crate::cdp::Page>>> = Rc::new(RefCell::new(page));
 
     page.borrow().set_default_navigation_timeout(5000);
 
@@ -142,7 +130,7 @@ pub async fn run_actions(
                 current_page
                     .goto(
                         &resolved_url,
-                        Some(ferridriver::options::GotoOptions {
+                        Some(crate::cdp::options::GotoOptions {
                             wait_until: Some(wait_until),
                             ..Default::default()
                         }),
@@ -612,7 +600,7 @@ fn selector_to_string(selector: &Selector) -> String {
 }
 
 async fn do_type(
-    page: &Arc<ferridriver::Page>,
+    page: &Arc<crate::cdp::Page>,
     context: &mut Context,
     value: &str,
     target: &Option<String>,
@@ -672,7 +660,7 @@ async fn do_type(
         } else {
             let final_selector = selector_str.trim_start_matches("xpath=");
             let js_expr = build_shadow_dom_js_for_action(shadow_root, iframe, final_selector, "type", &resolved_value);
-            page.evaluate(&js_expr, ferridriver::protocol::SerializedArgument::default(), None)
+            page.evaluate(&js_expr, crate::cdp::protocol::SerializedArgument::default(), None)
                 .await
                 .map_err(|e| Error::ActionFailed(format!("Failed to type via shadow DOM: {}", e)))?;
         }
@@ -773,7 +761,7 @@ fn build_shadow_dom_js_for_action(
 }
 
 async fn do_click(
-    page: &Arc<ferridriver::Page>,
+    page: &Arc<crate::cdp::Page>,
     target: &Option<String>,
     action_timeout: Option<u64>,
     shadow_root: &Option<SelectorPath>,
@@ -799,7 +787,7 @@ async fn do_click(
         } else {
             let final_selector = selector_str.trim_start_matches("xpath=");
             let js_expr = build_shadow_dom_js_for_action(shadow_root, iframe, final_selector, "click", "");
-            page.evaluate(&js_expr, ferridriver::protocol::SerializedArgument::default(), None)
+            page.evaluate(&js_expr, crate::cdp::protocol::SerializedArgument::default(), None)
                 .await
                 .map_err(|e| Error::ActionFailed(format!("Failed to click via shadow DOM: {}", e)))?;
         }
@@ -808,7 +796,7 @@ async fn do_click(
 }
 
 async fn do_hover(
-    page: &Arc<ferridriver::Page>,
+    page: &Arc<crate::cdp::Page>,
     target: &Option<String>,
     action_timeout: Option<u64>,
     shadow_root: &Option<SelectorPath>,
@@ -834,7 +822,7 @@ async fn do_hover(
         } else {
             let final_selector = selector_str.trim_start_matches("xpath=");
             let js_expr = build_shadow_dom_js_for_action(shadow_root, iframe, final_selector, "hover", "");
-            page.evaluate(&js_expr, ferridriver::protocol::SerializedArgument::default(), None)
+            page.evaluate(&js_expr, crate::cdp::protocol::SerializedArgument::default(), None)
                 .await
                 .map_err(|e| Error::ActionFailed(format!("Failed to hover via shadow DOM: {}", e)))?;
         }
@@ -843,7 +831,7 @@ async fn do_hover(
 }
 
 async fn do_wait(
-    page: &Arc<ferridriver::Page>,
+    page: &Arc<crate::cdp::Page>,
     context: &mut Context,
     url: &Option<String>,
     target: &Option<String>,
@@ -882,7 +870,7 @@ async fn do_wait(
                 } else {
                     let final_selector = selector_str.trim_start_matches("xpath=");
                     let js_expr = build_shadow_dom_js_for_action(shadow_root, iframe, final_selector, "read", "");
-                    page.evaluate(&js_expr, ferridriver::protocol::SerializedArgument::default(), None)
+                    page.evaluate(&js_expr, crate::cdp::protocol::SerializedArgument::default(), None)
                         .await
                         .map_err(|e| Error::ActionFailed(format!("Failed to wait via shadow DOM: {}", e)))?;
                 }
@@ -893,7 +881,7 @@ async fn do_wait(
 }
 
 async fn do_read(
-    page: &Arc<ferridriver::Page>,
+    page: &Arc<crate::cdp::Page>,
     context: &mut Context,
     target: &Option<String>,
     to: &Option<String>,
@@ -952,14 +940,14 @@ async fn do_read(
                 "read"
             };
             let js_expr = build_shadow_dom_js_for_action(shadow_root, iframe, final_selector, action, attribute.unwrap_or(""));
-            let result = page.evaluate(&js_expr, ferridriver::protocol::SerializedArgument::default(), None)
+            let result = page.evaluate(&js_expr, crate::cdp::protocol::SerializedArgument::default(), None)
                 .await
                 .map_err(|e| Error::ActionFailed(format!("Failed to read via shadow DOM: {}", e)))?;
             let content = match result {
-                ferridriver::protocol::SerializedValue::Str(s) => s,
-                ferridriver::protocol::SerializedValue::Number(n) => n.to_string(),
-                ferridriver::protocol::SerializedValue::Bool(b) => b.to_string(),
-                ferridriver::protocol::SerializedValue::Special(ferridriver::protocol::SpecialValue::Null) => String::new(),
+                crate::cdp::protocol::SerializedValue::Str(s) => s,
+                crate::cdp::protocol::SerializedValue::Number(n) => n.to_string(),
+                crate::cdp::protocol::SerializedValue::Bool(b) => b.to_string(),
+                crate::cdp::protocol::SerializedValue::Special(crate::cdp::protocol::SpecialValue::Null) => String::new(),
                 _ => String::new(),
             };
             content
@@ -975,7 +963,7 @@ async fn do_read(
 }
 
 async fn do_js(
-    page: &Arc<ferridriver::Page>,
+    page: &Arc<crate::cdp::Page>,
     context: &mut Context,
     code: &str,
     to: &Option<String>,
@@ -985,16 +973,16 @@ async fn do_js(
     let result = page
         .evaluate(
             code,
-            ferridriver::protocol::SerializedArgument::default(),
+            crate::cdp::protocol::SerializedArgument::default(),
             None,
         )
         .await
         .map_err(|e| Error::ActionFailed(format!("Failed to evaluate js: {}", e)))?;
     let result_str = match result {
-        ferridriver::protocol::SerializedValue::Str(s) => s,
-        ferridriver::protocol::SerializedValue::Number(n) => n.to_string(),
-        ferridriver::protocol::SerializedValue::Bool(b) => b.to_string(),
-        ferridriver::protocol::SerializedValue::Special(s) => format!("{:?}", s),
+        crate::cdp::protocol::SerializedValue::Str(s) => s,
+        crate::cdp::protocol::SerializedValue::Number(n) => n.to_string(),
+        crate::cdp::protocol::SerializedValue::Bool(b) => b.to_string(),
+        crate::cdp::protocol::SerializedValue::Special(s) => format!("{:?}", s),
         _ => format!("{:?}", result),
     };
     if verbose {
@@ -1009,7 +997,7 @@ async fn do_js(
 }
 
 async fn do_select(
-    page: &Arc<ferridriver::Page>,
+    page: &Arc<crate::cdp::Page>,
     context: &mut Context,
     value: &str,
     target: &Option<String>,
@@ -1055,7 +1043,7 @@ async fn do_select(
                 values.join(",")
             };
             let js_expr = build_shadow_dom_js_for_action(shadow_root, iframe, final_selector, "select", &values_json);
-            page.evaluate(&js_expr, ferridriver::protocol::SerializedArgument::default(), None)
+            page.evaluate(&js_expr, crate::cdp::protocol::SerializedArgument::default(), None)
                 .await
                 .map_err(|e| Error::ActionFailed(format!("Failed to select via shadow DOM: {}", e)))?;
         }
@@ -1064,7 +1052,7 @@ async fn do_select(
 }
 
 async fn do_check(
-    page: &Arc<ferridriver::Page>,
+    page: &Arc<crate::cdp::Page>,
     target: &Option<String>,
     action_timeout: Option<u64>,
     shadow_root: &Option<SelectorPath>,
@@ -1102,7 +1090,7 @@ async fn do_check(
             let final_selector = selector_str.trim_start_matches("xpath=");
             let action = if check { "check" } else { "uncheck" };
             let js_expr = build_shadow_dom_js_for_action(shadow_root, iframe, final_selector, action, "");
-            page.evaluate(&js_expr, ferridriver::protocol::SerializedArgument::default(), None)
+            page.evaluate(&js_expr, crate::cdp::protocol::SerializedArgument::default(), None)
                 .await
                 .map_err(|e| Error::ActionFailed(format!("Failed to {} via shadow DOM: {}", action, e)))?;
         }
@@ -1111,7 +1099,7 @@ async fn do_check(
 }
 
 async fn do_dblclick(
-    page: &Arc<ferridriver::Page>,
+    page: &Arc<crate::cdp::Page>,
     target: &Option<String>,
     action_timeout: Option<u64>,
     shadow_root: &Option<SelectorPath>,
@@ -1140,7 +1128,7 @@ async fn do_dblclick(
         } else {
             let final_selector = selector_str.trim_start_matches("xpath=");
             let js_expr = build_shadow_dom_js_for_action(shadow_root, iframe, final_selector, "dblclick", "");
-            page.evaluate(&js_expr, ferridriver::protocol::SerializedArgument::default(), None)
+            page.evaluate(&js_expr, crate::cdp::protocol::SerializedArgument::default(), None)
                 .await
                 .map_err(|e| Error::ActionFailed(format!("Failed to dblclick via shadow DOM: {}", e)))?;
         }
@@ -1149,7 +1137,7 @@ async fn do_dblclick(
 }
 
 async fn do_right_click(
-    page: &Arc<ferridriver::Page>,
+    page: &Arc<crate::cdp::Page>,
     target: &Option<String>,
     action_timeout: Option<u64>,
     shadow_root: &Option<SelectorPath>,
@@ -1179,7 +1167,7 @@ async fn do_right_click(
         } else {
             let final_selector = selector_str.trim_start_matches("xpath=");
             let js_expr = build_shadow_dom_js_for_action(shadow_root, iframe, final_selector, "right_click", "");
-            page.evaluate(&js_expr, ferridriver::protocol::SerializedArgument::default(), None)
+            page.evaluate(&js_expr, crate::cdp::protocol::SerializedArgument::default(), None)
                 .await
                 .map_err(|e| Error::ActionFailed(format!("Failed to right_click via shadow DOM: {}", e)))?;
         }
@@ -1188,7 +1176,7 @@ async fn do_right_click(
 }
 
 async fn do_clear(
-    page: &Arc<ferridriver::Page>,
+    page: &Arc<crate::cdp::Page>,
     target: &Option<String>,
     action_timeout: Option<u64>,
     shadow_root: &Option<SelectorPath>,
@@ -1218,7 +1206,7 @@ async fn do_clear(
         } else {
             let final_selector = selector_str.trim_start_matches("xpath=");
             let js_expr = build_shadow_dom_js_for_action(shadow_root, iframe, final_selector, "clear", "");
-            page.evaluate(&js_expr, ferridriver::protocol::SerializedArgument::default(), None)
+            page.evaluate(&js_expr, crate::cdp::protocol::SerializedArgument::default(), None)
                 .await
                 .map_err(|e| Error::ActionFailed(format!("Failed to clear via shadow DOM: {}", e)))?;
         }
@@ -1227,7 +1215,7 @@ async fn do_clear(
 }
 
 async fn do_upload(
-    page: &Arc<ferridriver::Page>,
+    page: &Arc<crate::cdp::Page>,
     files: &[String],
     target: &Option<String>,
     _action_timeout: Option<u64>,
@@ -1261,7 +1249,7 @@ async fn do_upload(
 }
 
 async fn do_drag(
-    page: &Arc<ferridriver::Page>,
+    page: &Arc<crate::cdp::Page>,
     context: &mut Context,
     source: &str,
     to: &str,
@@ -1299,7 +1287,7 @@ async fn do_drag(
 }
 
 async fn do_scroll(
-    page: &Arc<ferridriver::Page>,
+    page: &Arc<crate::cdp::Page>,
     context: &mut Context,
     target: &str,
     x: Option<i64>,
@@ -1335,7 +1323,7 @@ async fn do_scroll(
             }
             let final_selector = selector_str.trim_start_matches("xpath=");
             let js_expr = build_shadow_dom_js_for_action(shadow_root, iframe, final_selector, "scroll", "");
-            page.evaluate(&js_expr, ferridriver::protocol::SerializedArgument::default(), None)
+            page.evaluate(&js_expr, crate::cdp::protocol::SerializedArgument::default(), None)
                 .await
                 .map_err(|e| Error::ActionFailed(format!("Failed to scroll via shadow DOM: {}", e)))?;
         }
@@ -1351,7 +1339,7 @@ async fn do_scroll(
 }
 
 async fn wait_for_url(
-    page: &Arc<ferridriver::Page>,
+    page: &Arc<crate::cdp::Page>,
     url: &str,
     timeout: Duration,
 ) -> Result<(), Error> {
@@ -1367,14 +1355,14 @@ async fn wait_for_url(
 }
 
 async fn wait_for_selector(
-    page: &Arc<ferridriver::Page>,
+    page: &Arc<crate::cdp::Page>,
     selector: &str,
     timeout: Duration,
 ) -> Result<(), Error> {
     let timeout_ms = timeout.as_millis() as u64;
     page.wait_for_selector(
         selector,
-        ferridriver::options::WaitOptions {
+        crate::cdp::options::WaitOptions {
             state: Some("attached".to_string()),
             timeout: Some(timeout_ms),
         },
@@ -1385,7 +1373,7 @@ async fn wait_for_selector(
 }
 
 async fn wait_for_element(
-    page: &Arc<ferridriver::Page>,
+    page: &Arc<crate::cdp::Page>,
     selector: &str,
     timeout: Duration,
 ) -> Result<(), Error> {
@@ -1393,7 +1381,7 @@ async fn wait_for_element(
 }
 
 async fn check_condition(
-    page: &Arc<ferridriver::Page>,
+    page: &Arc<crate::cdp::Page>,
     selector: Option<&Selector>,
     _verbose: bool,
 ) -> Result<bool, Error> {
@@ -1435,7 +1423,7 @@ async fn check_condition(
 }
 
 async fn evaluate_condition(
-    page: &Arc<ferridriver::Page>,
+    page: &Arc<crate::cdp::Page>,
     condition: &Condition,
     context: &Context,
     verbose: bool,

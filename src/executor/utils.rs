@@ -11,7 +11,7 @@ pub fn get_timeout() -> Duration {
 }
 
 pub async fn parse_builtin_variables(
-    page: &Arc<ferridriver::Page>,
+    page: &Arc<crate::cdp::Page>,
     input: &str,
 ) -> Result<String, Error> {
     let mut result = input.to_string();
@@ -22,13 +22,13 @@ pub async fn parse_builtin_variables(
         match page
             .evaluate(
                 "window.location.href",
-                ferridriver::protocol::SerializedArgument::default(),
+                crate::cdp::protocol::SerializedArgument::default(),
                 None,
             )
             .await
         {
             Ok(current_url) => {
-                if let ferridriver::protocol::SerializedValue::Str(current_url_str) = current_url {
+                if let crate::cdp::protocol::SerializedValue::Str(current_url_str) = current_url {
                     result = result.replace("$url", &current_url_str);
                 }
             }
@@ -40,11 +40,11 @@ pub async fn parse_builtin_variables(
     Ok(result)
 }
 
-pub fn page_is_navigated(page: &Arc<ferridriver::Page>) -> bool {
+pub fn page_is_navigated(page: &Arc<crate::cdp::Page>) -> bool {
     !page.url().is_empty()
 }
 
-pub async fn ensure_page_initialized(page: &Arc<ferridriver::Page>) -> Result<(), Error> {
+pub async fn ensure_page_initialized(page: &Arc<crate::cdp::Page>) -> Result<(), Error> {
     if page.url().is_empty() {
         page.reload(None)
             .await
