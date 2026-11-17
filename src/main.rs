@@ -4,8 +4,19 @@ use serde::Serialize;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
+pub struct HelpArgs {
+    /// Command to show help for
+    #[arg(value_name = "COMMAND")]
+    pub command: Option<String>,
+    /// Show examples for the command
+    #[arg(long)]
+    pub examples: bool,
+}
+
+#[derive(Parser, Debug)]
 #[command(name = "bcl")]
 #[command(about = "Browser Control Language — execute YAML-based browser automation flows", long_about = None)]
+#[command(disable_help_subcommand = true)]
 pub enum Cli {
     /// Run a flow
     Run(RunArgs),
@@ -23,6 +34,8 @@ pub enum Cli {
     Compile(CompileArgs),
     /// Execute one BCL browser action
     Exec(ExecArgs),
+    /// Show help for commands
+    Help(HelpArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -390,7 +403,7 @@ exec bcl run -t "$FLOW_NAME" - "${{EXTRA_ARGS[@]}}" <<< "$YAML_CONTENT"
 
     let output_path = std::path::Path::new(&output_name);
     std::fs::write(output_path, &script)?;
-    
+
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -604,7 +617,7 @@ async fn exec_action(args: &ExecArgs) -> anyhow::Result<()> {
     let actions = flow_file
         .get("main")
         .ok_or_else(|| anyhow::anyhow!("No valid actions were provided"))?;
-    
+
     let mut context = Context::from_env();
 
     run_actions(
@@ -619,6 +632,1075 @@ async fn exec_action(args: &ExecArgs) -> anyhow::Result<()> {
 
     println!("OK");
     Ok(())
+}
+
+fn print_command_summary() {
+    println!("BCL Actions (use in YAML flows):");
+    println!();
+    println!("  goto        Navigate to a URL");
+    println!("  click       Click an element");
+    println!("  type        Type text into an input");
+    println!("  press       Press a keyboard key");
+    println!("  wait        Wait for element, URL, or duration");
+    println!("  read        Read element text, HTML, attribute, or value");
+    println!("  hover       Hover over an element");
+    println!("  select      Select option(s) from a dropdown");
+    println!("  check       Check a checkbox");
+    println!("  uncheck     Uncheck a checkbox");
+    println!("  dblclick    Double-click an element");
+    println!("  right-click Right-click an element");
+    println!("  clear       Clear an input field");
+    println!("  upload      Upload file(s)");
+    println!("  drag        Drag and drop");
+    println!("  scroll      Scroll an element");
+    println!("  dialog      Handle browser dialogs (accept/dismiss/prompt)");
+    println!("  download    Wait for and save a download");
+    println!("  log         Log a message");
+    println!("  call        Call another flow");
+    println!("  js          Execute JavaScript");
+    println!("  define      Define a variable");
+    println!("  if          Conditional execution");
+    println!("  for         Loop over items");
+    println!("  while       Loop while condition is true");
+    println!("  retry       Retry actions on failure");
+    println!("  assert      Assert a condition");
+    println!("  return      Return values from a flow");
+    println!("  fail        Fail with a message");
+    println!("  save        Save context to file");
+    println!("  load        Load context from file");
+    println!("  request     Make an HTTP request");
+    println!("  tab         Switch or close tabs");
+    println!();
+    println!("CLI Commands:");
+    println!("  run         Run a BCL flow from a YAML file");
+    println!("  validate    Validate a flow YAML file (syntax and structure)");
+    println!("  list        List all flows defined in a YAML file");
+    println!("  compile     Compile a YAML flow into a standalone shell script");
+    println!("  exec        Execute a single BCL browser action");
+    println!("  help        Show this help message");
+    println!();
+    println!("Run 'bcl help <action>' for detailed help on an action.");
+    println!("Run 'bcl help <action> --examples' for usage examples.");
+    println!("Run 'bcl help cli' for CLI command help.");
+}
+
+fn print_command_help(command: &str) {
+    match command {
+        "goto" => {
+            println!("goto - Navigate to a URL");
+            println!();
+            println!("USAGE:");
+            println!("    goto: <URL>");
+            println!("    goto:");
+            println!("      url: <URL>");
+            println!("      wait_until: <load|domcontentloaded|networkidle>  # optional");
+            println!("      tab: <index|new>                                 # optional");
+            println!();
+            println!("OPTIONS:");
+            println!("    url            The URL to navigate to");
+            println!("    wait_until     When to consider navigation complete (default: load)");
+            println!("    tab            Target tab: index or 'new' for new tab");
+        }
+        "click" => {
+            println!("click - Click an element");
+            println!();
+            println!("USAGE:");
+            println!("    click: <SELECTOR>");
+            println!("    click:");
+            println!("      target: <SELECTOR>");
+            println!("      timeout: <MS>          # optional");
+            println!("      shadow_root: <PATH>    # optional");
+            println!("      iframe: <PATH>         # optional");
+            println!();
+            println!("OPTIONS:");
+            println!("    target       Element selector (XPath or CSS)");
+            println!("    timeout      Max wait time in milliseconds");
+            println!("    shadow_root  Shadow DOM path for nested elements");
+            println!("    iframe       Iframe selector path");
+        }
+        "type" => {
+            println!("type - Type text into an input");
+            println!();
+            println!("USAGE:");
+            println!("    type: <TEXT>");
+            println!("    type:");
+            println!("      value: <TEXT>");
+            println!("      target: <SELECTOR>     # optional");
+            println!("      secret: true|false     # optional (default: false)");
+            println!("      timeout: <MS>          # optional");
+            println!("      shadow_root: <PATH>    # optional");
+            println!("      iframe: <PATH>         # optional");
+            println!();
+            println!("OPTIONS:");
+            println!("    value        Text to type (use secret: true for passwords)");
+            println!("    target       Element selector (defaults to focused element)");
+            println!("    secret       If true, value is treated as sensitive");
+            println!("    timeout      Max wait time in milliseconds");
+        }
+        "press" => {
+            println!("press - Press a keyboard key");
+            println!();
+            println!("USAGE:");
+            println!("    press: <KEY>");
+            println!();
+            println!("KEY EXAMPLES:");
+            println!("    Enter, Tab, Escape, ArrowUp, ArrowDown, ArrowLeft, ArrowRight");
+            println!("    Control+A, Control+C, Control+V, Meta+Enter");
+            println!("    F1-F12, Home, End, PageUp, PageDown, Delete, Backspace");
+        }
+        "wait" => {
+            println!("wait - Wait for element, URL, or duration");
+            println!();
+            println!("USAGE:");
+            println!("    wait: <MS>");
+            println!("    wait:");
+            println!("      duration: <MS>         # wait for N milliseconds");
+            println!("      target: <SELECTOR>     # wait for element");
+            println!("      url: <URL>             # wait for URL to match");
+            println!("      timeout: <MS>          # optional, max wait time");
+            println!("      shadow_root: <PATH>    # optional");
+            println!("      iframe: <PATH>         # optional");
+            println!();
+            println!("OPTIONS:");
+            println!("    duration     Milliseconds to wait");
+            println!("    target       Wait for element to be visible");
+            println!("    url          Wait for URL to match pattern");
+            println!("    timeout      Max wait time (default: 30000)");
+        }
+        "read" => {
+            println!("read - Read element text, HTML, attribute, or value");
+            println!();
+            println!("USAGE:");
+            println!("    read: <SELECTOR>");
+            println!("    read:");
+            println!("      target: <SELECTOR>");
+            println!("      to: <VAR_NAME>         # store result in variable");
+            println!("      html: true|false       # get outerHTML instead of text");
+            println!("      attribute: <NAME>      # get attribute value");
+            println!("      value: true|false      # get input value");
+            println!("      timeout: <MS>          # optional");
+            println!("      shadow_root: <PATH>    # optional");
+            println!("      iframe: <PATH>         # optional");
+            println!();
+            println!("OPTIONS:");
+            println!("    target       Element selector");
+            println!("    to           Variable name to store result");
+            println!("    html         If true, return outerHTML");
+            println!("    attribute    Get specific attribute (e.g., href, src)");
+            println!("    value        If true, return input value");
+        }
+        "hover" => {
+            println!("hover - Hover over an element");
+            println!();
+            println!("USAGE:");
+            println!("    hover: <SELECTOR>");
+            println!("    hover:");
+            println!("      target: <SELECTOR>");
+            println!("      timeout: <MS>          # optional");
+            println!("      shadow_root: <PATH>    # optional");
+            println!("      iframe: <PATH>         # optional");
+        }
+        "select" => {
+            println!("select - Select option(s) from a dropdown");
+            println!();
+            println!("USAGE:");
+            println!("    select: <VALUE>");
+            println!("    select:");
+            println!("      value: <VALUE>");
+            println!("      target: <SELECTOR>     # optional");
+            println!("      values: [<VAL1>, <VAL2>]  # multiple values");
+            println!("      timeout: <MS>          # optional");
+            println!("      shadow_root: <PATH>    # optional");
+            println!("      iframe: <PATH>         # optional");
+            println!();
+            println!("OPTIONS:");
+            println!("    value        Single value to select");
+            println!("    values       Array of values for multi-select");
+            println!("    target       Select element selector");
+        }
+        "check" => {
+            println!("check - Check a checkbox or radio button");
+            println!();
+            println!("USAGE:");
+            println!("    check: <SELECTOR>");
+            println!("    check:");
+            println!("      target: <SELECTOR>");
+            println!("      timeout: <MS>          # optional");
+            println!("      shadow_root: <PATH>    # optional");
+            println!("      iframe: <PATH>         # optional");
+        }
+        "uncheck" => {
+            println!("uncheck - Uncheck a checkbox");
+            println!();
+            println!("USAGE:");
+            println!("    uncheck: <SELECTOR>");
+            println!("    uncheck:");
+            println!("      target: <SELECTOR>");
+            println!("      timeout: <MS>          # optional");
+            println!("      shadow_root: <PATH>    # optional");
+            println!("      iframe: <PATH>         # optional");
+        }
+        "dblclick" => {
+            println!("dblclick - Double-click an element");
+            println!();
+            println!("USAGE:");
+            println!("    dblclick: <SELECTOR>");
+            println!("    dblclick:");
+            println!("      target: <SELECTOR>");
+            println!("      timeout: <MS>          # optional");
+            println!("      shadow_root: <PATH>    # optional");
+            println!("      iframe: <PATH>         # optional");
+        }
+        "right-click" | "right_click" => {
+            println!("right-click - Right-click an element (context menu)");
+            println!();
+            println!("USAGE:");
+            println!("    right-click: <SELECTOR>");
+            println!("    right-click:");
+            println!("      target: <SELECTOR>");
+            println!("      timeout: <MS>          # optional");
+            println!("      shadow_root: <PATH>    # optional");
+            println!("      iframe: <PATH>         # optional");
+        }
+        "clear" => {
+            println!("clear - Clear an input field");
+            println!();
+            println!("USAGE:");
+            println!("    clear: <SELECTOR>");
+            println!("    clear:");
+            println!("      target: <SELECTOR>");
+            println!("      timeout: <MS>          # optional");
+            println!("      shadow_root: <PATH>    # optional");
+            println!("      iframe: <PATH>         # optional");
+        }
+        "upload" => {
+            println!("upload - Upload file(s) to an input");
+            println!();
+            println!("USAGE:");
+            println!("    upload: <FILE_PATH>");
+            println!("    upload:");
+            println!("      files: [<PATH1>, <PATH2>]  # single or multiple");
+            println!("      target: <SELECTOR>         # optional");
+            println!("      timeout: <MS>              # optional");
+            println!("      shadow_root: <PATH>        # optional");
+            println!("      iframe: <PATH>             # optional");
+        }
+        "drag" => {
+            println!("drag - Drag and drop");
+            println!();
+            println!("USAGE:");
+            println!("    drag:");
+            println!("      source: <SELECTOR>");
+            println!("      to: <SELECTOR>");
+            println!("      timeout: <MS>          # optional");
+            println!("      shadow_root: <PATH>    # optional");
+            println!("      iframe: <PATH>         # optional");
+        }
+        "scroll" => {
+            println!("scroll - Scroll an element");
+            println!();
+            println!("USAGE:");
+            println!("    scroll: <SELECTOR>");
+            println!("    scroll:");
+            println!("      target: <SELECTOR>");
+            println!("      x: <PIXELS>            # optional");
+            println!("      y: <PIXELS>            # optional");
+            println!("      timeout: <MS>          # optional");
+            println!("      shadow_root: <PATH>    # optional");
+            println!("      iframe: <PATH>         # optional");
+        }
+        "dialog" => {
+            println!("dialog - Handle browser dialogs");
+            println!();
+            println!("USAGE:");
+            println!("    dialog: accept");
+            println!("    dialog: dismiss");
+            println!("    dialog:");
+            println!("      mode: accept|dismiss|prompt");
+            println!("      prompt_text: <TEXT>    # for prompt mode");
+            println!("      timeout: <MS>          # optional");
+        }
+        "download" => {
+            println!("download - Wait for and save a download");
+            println!();
+            println!("USAGE:");
+            println!("    download:");
+            println!("      path: <FILE_PATH>");
+            println!("      timeout: <MS>          # optional");
+            println!("      to: <VAR_NAME>         # optional, store path in variable");
+        }
+        "log" => {
+            println!("log - Log a message");
+            println!();
+            println!("USAGE:");
+            println!("    log: <MESSAGE>");
+            println!("    log:");
+            println!("      text: <MESSAGE>");
+        }
+        "call" => {
+            println!("call - Call another flow");
+            println!();
+            println!("USAGE:");
+            println!("    call: <FLOW_NAME>");
+            println!("    call:");
+            println!("      flow: <FLOW_NAME>");
+            println!("      params:                # optional");
+            println!("        key: value");
+        }
+        "js" => {
+            println!("js - Execute JavaScript");
+            println!();
+            println!("USAGE:");
+            println!("    js: <CODE>");
+            println!("    js:");
+            println!("      code: <CODE>");
+            println!("      to: <VAR_NAME>         # optional, store result");
+        }
+        "define" => {
+            println!("define - Define a variable");
+            println!();
+            println!("USAGE:");
+            println!("    define: <VALUE>");
+            println!("    define:");
+            println!("      var: <VAR_NAME>");
+            println!("      value: <VALUE>");
+            println!("      overwrite: true|false  # optional (default: true)");
+        }
+        "if" => {
+            println!("if - Conditional execution");
+            println!();
+            println!("USAGE:");
+            println!("    if:");
+            println!("      defined: <VAR>         # variable is defined");
+            println!("      not_defined: <VAR>     # variable is not defined");
+            println!("      equals:                # value equals");
+            println!("        left: <VALUE>");
+            println!("        right: <VALUE>");
+            println!("      visible: <SELECTOR>    # element is visible");
+            println!("      and: [<COND>, ...]     # all conditions true");
+            println!("      or: [<COND>, ...]      # any condition true");
+            println!("      then:                  # actions if true");
+            println!("        - <ACTION>");
+            println!("      else:                  # optional, actions if false");
+            println!("        - <ACTION>");
+        }
+        "for" => {
+            println!("for - Loop over items");
+            println!();
+            println!("USAGE:");
+            println!("    for:");
+            println!("      items: <LIST|VAR>      # list or variable containing list");
+            println!("      as: <VAR_NAME>         # loop variable name");
+            println!("      count: <N>             # optional, loop N times");
+            println!("      do:                    # actions to repeat");
+            println!("        - <ACTION>");
+        }
+        "while" => {
+            println!("while - Loop while condition is true");
+            println!();
+            println!("USAGE:");
+            println!("    while:");
+            println!("      condition: <CONDITION>  # same as 'if' conditions");
+            println!("      max: <N>                # optional, max iterations");
+            println!("      do:                     # actions to repeat");
+            println!("        - <ACTION>");
+        }
+        "retry" => {
+            println!("retry - Retry actions on failure");
+            println!();
+            println!("USAGE:");
+            println!("    retry:");
+            println!("      attempts: <N>");
+            println!("      interval: <MS>         # optional, delay between retries");
+            println!("      do:                    # actions to retry");
+            println!("        - <ACTION>");
+        }
+        "assert" => {
+            println!("assert - Assert a condition, fail if false");
+            println!();
+            println!("USAGE:");
+            println!("    assert:");
+            println!("      condition: <CONDITION>  # same as 'if' conditions");
+            println!("      message: <TEXT>         # optional, custom failure message");
+        }
+        "return" => {
+            println!("return - Return values from a flow");
+            println!();
+            println!("USAGE:");
+            println!("    return:");
+            println!("      key: value");
+        }
+        "fail" => {
+            println!("fail - Fail with a message");
+            println!();
+            println!("USAGE:");
+            println!("    fail: <MESSAGE>");
+            println!("    fail:");
+            println!("      message: <MESSAGE>");
+        }
+        "save" => {
+            println!("save - Save context to file");
+            println!();
+            println!("USAGE:");
+            println!("    save: <FILE_PATH>");
+            println!("    save:");
+            println!("      path: <FILE_PATH>");
+        }
+        "load" => {
+            println!("load - Load context from file");
+            println!();
+            println!("USAGE:");
+            println!("    load: <FILE_PATH>");
+            println!("    load:");
+            println!("      path: <FILE_PATH>");
+        }
+        "request" => {
+            println!("request - Make an HTTP request");
+            println!();
+            println!("USAGE:");
+            println!("    request:");
+            println!("      url: <URL>");
+            println!("      method: <GET|POST|...> # optional (default: GET)");
+            println!("      headers:               # optional");
+            println!("        Key: Value");
+            println!("      body: <STRING>         # optional");
+            println!("      to: <VAR_NAME>         # optional, store response");
+            println!("      timeout: <MS>          # optional");
+        }
+        "tab" => {
+            println!("tab - Switch or close tabs");
+            println!();
+            println!("USAGE:");
+            println!("    tab: <INDEX>");
+            println!("    tab:");
+            println!("      index: <N>             # switch to tab N");
+            println!("      close: true|false      # close current tab");
+        }
+        "cli" => {
+            println!("CLI Commands:");
+            println!();
+            println!("  run       Run a BCL flow from a YAML file");
+            println!("  validate  Validate a flow YAML file (syntax and structure)");
+            println!("  list      List all flows defined in a YAML file");
+            println!("  compile   Compile a YAML flow into a standalone shell script");
+            println!("  exec      Execute a single BCL browser action");
+            println!("  help      Show this help message");
+            println!();
+            println!("Run 'bcl help <command>' for detailed help on a CLI command.");
+            println!("Run 'bcl help <command> --examples' for usage examples.");
+        }
+        "run" | "validate" | "list" | "compile" | "exec" | "help" => {
+            // Show CLI command help for these commands
+            print_cli_command_help(command);
+        }
+        _ => {
+            eprintln!("Unknown action: {}", command);
+            eprintln!("Run 'bcl help' for a list of available actions.");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn print_cli_command_help(command: &str) {
+    match command {
+        "run" => {
+            println!("bcl run - Run a BCL flow");
+            println!();
+            println!("USAGE:");
+            println!("    bcl run <PATH> [OPTIONS]");
+            println!();
+            println!("ARGUMENTS:");
+            println!("    <PATH>    Path to the YAML file containing the flow definition (use - for stdin)");
+            println!();
+            println!("OPTIONS:");
+            println!("    -t, --target <TARGET>    Target flow to execute (default: main)");
+            println!("    -o, --output <FORMAT>    Output format: simple, pretty, json (default: simple)");
+            println!("    -v, --verbose            Verbose mode — show debug info and full error traces");
+            println!("    --var <KEY=VALUE>        Override or set context variables (repeatable)");
+            println!("    --dry-run                Parse and resolve variables, print actions, do not connect to browser");
+            println!("    -h, --help               Print help");
+        }
+        "validate" => {
+            println!("bcl validate - Validate a flow YAML file");
+            println!();
+            println!("USAGE:");
+            println!("    bcl validate <PATH>");
+            println!();
+            println!("ARGUMENTS:");
+            println!("    <PATH>    Path to the YAML file to validate (use - for stdin)");
+            println!();
+            println!("OPTIONS:");
+            println!("    -h, --help    Print help");
+        }
+        "list" => {
+            println!("bcl list - List all flows in a YAML file");
+            println!();
+            println!("USAGE:");
+            println!("    bcl list <PATH>");
+            println!();
+            println!("ARGUMENTS:");
+            println!("    <PATH>    Path to the YAML file (use - for stdin)");
+            println!();
+            println!("OPTIONS:");
+            println!("    -h, --help    Print help");
+        }
+        "compile" => {
+            println!("bcl compile - Compile a YAML flow into a standalone shell script");
+            println!();
+            println!("USAGE:");
+            println!("    bcl compile <YAML_PATH> [OPTIONS]");
+            println!();
+            println!("ARGUMENTS:");
+            println!("    <YAML_PATH>    Path to the YAML file to compile");
+            println!();
+            println!("OPTIONS:");
+            println!("    -n, --name <NAME>    Optional name for the output file (without extension)");
+            println!("    -h, --help         Print help");
+        }
+        "exec" => {
+            println!("bcl exec - Execute a single BCL browser action");
+            println!();
+            println!("USAGE:");
+            println!("    bcl exec <ACTION> [VALUE] [OPTIONS]");
+            println!("    bcl exec --stdin");
+            println!();
+            println!("ARGUMENTS:");
+            println!("    <ACTION>    BCL action to execute (e.g., goto, click, read, type, wait)");
+            println!("    <VALUE>     The action's primary value (e.g., URL for goto, selector for click)");
+            println!();
+            println!("OPTIONS:");
+            println!("    --<OPTION> <VALUE>    Action-specific options (e.g., --html true, --to VAR_NAME)");
+            println!("    -s, --stdin           Read multiple actions from stdin, one per line");
+            println!("    -h, --help            Print help");
+            println!();
+            println!("EXAMPLES:");
+            println!("    bcl exec goto https://example.com");
+            println!("    bcl exec click \"//button[@id='submit']\"");
+            println!("    bcl exec read \"//body\" --html true --to BODY_HTML");
+            println!("    bcl exec type \"//input[@name='q']\" \"search term\"");
+            println!("    bcl exec wait 2000");
+        }
+        "help" => {
+            println!("bcl help - Show help for commands");
+            println!();
+            println!("USAGE:");
+            println!("    bcl help [COMMAND] [--examples]");
+            println!();
+            println!("ARGUMENTS:");
+            println!("    [COMMAND]    Command to show help for (run, validate, list, compile, exec, help)");
+            println!();
+            println!("OPTIONS:");
+            println!("    --examples    Show usage examples for the command");
+            println!("    -h, --help    Print help");
+        }
+        _ => {
+            eprintln!("Unknown CLI command: {}", command);
+            eprintln!("Run 'bcl help cli' for a list of available commands.");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn print_cli_command_examples(command: &str) {
+    match command {
+        "run" => {
+            println!("bcl run - Examples");
+            println!();
+            println!("Run the default 'main' flow:");
+            println!("    bcl run script.yml");
+            println!();
+            println!("Run a specific flow target:");
+            println!("    bcl run script.yml -t login");
+            println!();
+            println!("Run with verbose output:");
+            println!("    bcl run script.yml -v");
+            println!();
+            println!("Run with JSON output:");
+            println!("    bcl run script.yml -o json");
+            println!();
+            println!("Run with custom variables:");
+            println!("    bcl run script.yml --var USERNAME=admin --var PASSWORD=secret");
+            println!();
+            println!("Dry run (no browser connection):");
+            println!("    bcl run script.yml --dry-run");
+            println!();
+            println!("Read from stdin:");
+            println!("    cat script.yml | bcl run -");
+        }
+        "validate" => {
+            println!("bcl validate - Examples");
+            println!();
+            println!("Validate a YAML file:");
+            println!("    bcl validate script.yml");
+            println!();
+            println!("Validate from stdin:");
+            println!("    cat script.yml | bcl validate -");
+        }
+        "list" => {
+            println!("bcl list - Examples");
+            println!();
+            println!("List flows in a file:");
+            println!("    bcl list script.yml");
+            println!();
+            println!("List flows from stdin:");
+            println!("    cat script.yml | bcl list -");
+        }
+        "compile" => {
+            println!("bcl compile - Examples");
+            println!();
+            println!("Compile to default output name:");
+            println!("    bcl compile script.yml");
+            println!();
+            println!("Compile with custom output name:");
+            println!("    bcl compile script.yml -n my-script");
+            println!();
+            println!("Run the generated script:");
+            println!("    ./my-script login");
+            println!("    ./my-script login --verbose");
+        }
+        "exec" => {
+            println!("bcl exec - Examples");
+            println!();
+            println!("Navigate to a URL:");
+            println!("    bcl exec goto https://example.com");
+            println!();
+            println!("Click an element:");
+            println!("    bcl exec click \"//button[@id='submit']\"");
+            println!();
+            println!("Read element text/HTML:");
+            println!("    bcl exec read \"//body\" --html true --to BODY_HTML");
+            println!("    bcl exec read \"//input[@name='q']\" --value true --to INPUT_VALUE");
+            println!();
+            println!("Type into an input:");
+            println!("    bcl exec type \"//input[@name='q']\" \"search term\"");
+            println!();
+            println!("Wait:");
+            println!("    bcl exec wait 2000");
+            println!();
+            println!("Multiple actions from stdin:");
+            println!("    echo 'goto https://example.com' | bcl exec --stdin");
+            println!("    echo 'click \"//a[@href]\"' | bcl exec --stdin");
+        }
+        "help" => {
+            println!("bcl help - Examples");
+            println!();
+            println!("Show command summary:");
+            println!("    bcl help");
+            println!();
+            println!("Show detailed help for 'run':");
+            println!("    bcl help run");
+            println!();
+            println!("Show examples for 'exec':");
+            println!("    bcl help exec --examples");
+        }
+        _ => {
+            eprintln!("Unknown CLI command: {}", command);
+            eprintln!("Run 'bcl help cli' for a list of available commands.");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn print_command_examples(command: &str) {
+    match command {
+        "goto" => {
+            println!("goto - Examples");
+            println!();
+            println!("Simple navigation:");
+            println!("    goto: https://example.com");
+            println!();
+            println!("With options:");
+            println!("    goto:");
+            println!("      url: https://example.com");
+            println!("      wait_until: networkidle");
+        }
+        "click" => {
+            println!("click - Examples");
+            println!();
+            println!("Click by XPath:");
+            println!("    click: \"//button[@id='submit']\"");
+            println!();
+            println!("Click with options:");
+            println!("    click:");
+            println!("      target: \"//a[@class='link']\"");
+            println!("      timeout: 5000");
+        }
+        "type" => {
+            println!("type - Examples");
+            println!();
+            println!("Type into focused element:");
+            println!("    type: \"search query\"");
+            println!();
+            println!("Type into specific element:");
+            println!("    type:");
+            println!("      target: \"//input[@name='q']\"");
+            println!("      value: \"search term\"");
+            println!();
+            println!("Type password (hidden in logs):");
+            println!("    type:");
+            println!("      target: \"//input[@type='password']\"");
+            println!("      value: \"secret123\"");
+            println!("      secret: true");
+        }
+        "press" => {
+            println!("press - Examples");
+            println!();
+            println!("Press Enter:");
+            println!("    press: Enter");
+            println!();
+            println!("Press Ctrl+A (select all):");
+            println!("    press: Control+A");
+            println!();
+            println!("Press Escape:");
+            println!("    press: Escape");
+        }
+        "wait" => {
+            println!("wait - Examples");
+            println!();
+            println!("Wait 2 seconds:");
+            println!("    wait: 2000");
+            println!();
+            println!("Wait for element:");
+            println!("    wait:");
+            println!("      target: \"//div[@id='content']\"");
+            println!();
+            println!("Wait for URL to contain 'success':");
+            println!("    wait:");
+            println!("      url: \"*success*\"");
+            println!("      timeout: 10000");
+        }
+        "read" => {
+            println!("read - Examples");
+            println!();
+            println!("Read element text:");
+            println!("    read: \"//h1\"");
+            println!("    # result in LAST_READ variable");
+            println!();
+            println!("Read HTML:");
+            println!("    read:");
+            println!("      target: \"//div[@id='content']\"");
+            println!("      html: true");
+            println!("      to: PAGE_HTML");
+            println!();
+            println!("Read attribute:");
+            println!("    read:");
+            println!("      target: \"//a[@class='link']\"");
+            println!("      attribute: href");
+            println!("      to: LINK_URL");
+            println!();
+            println!("Read input value:");
+            println!("    read:");
+            println!("      target: \"//input[@name='email']\"");
+            println!("      value: true");
+            println!("      to: EMAIL_VALUE");
+        }
+        "hover" => {
+            println!("hover - Examples");
+            println!();
+            println!("Hover over menu:");
+            println!("    hover: \"//nav//a[@class='dropdown']\"");
+        }
+        "select" => {
+            println!("select - Examples");
+            println!();
+            println!("Select single option:");
+            println!("    select:");
+            println!("      target: \"//select[@name='country']\"");
+            println!("      value: \"US\"");
+            println!();
+            println!("Multi-select:");
+            println!("    select:");
+            println!("      target: \"//select[@multiple]\"");
+            println!("      values: [\"US\", \"CA\", \"MX\"]");
+        }
+        "check" => {
+            println!("check - Examples");
+            println!();
+            println!("Check checkbox:");
+            println!("    check: \"//input[@id='terms']\"");
+        }
+        "uncheck" => {
+            println!("uncheck - Examples");
+            println!();
+            println!("Uncheck checkbox:");
+            println!("    uncheck: \"//input[@id='newsletter']\"");
+        }
+        "dblclick" => {
+            println!("dblclick - Examples");
+            println!();
+            println!("Double-click to edit:");
+            println!("    dblclick: \"//td[@class='editable']\"");
+        }
+        "right-click" | "right_click" => {
+            println!("right-click - Examples");
+            println!();
+            println!("Right-click for context menu:");
+            println!("    right-click: \"//img[@id='photo']\"");
+        }
+        "clear" => {
+            println!("clear - Examples");
+            println!();
+            println!("Clear input field:");
+            println!("    clear: \"//input[@name='search']\"");
+        }
+        "upload" => {
+            println!("upload - Examples");
+            println!();
+            println!("Upload single file:");
+            println!("    upload:");
+            println!("      target: \"//input[@type='file']\"");
+            println!("      files: \"/path/to/file.pdf\"");
+            println!();
+            println!("Upload multiple files:");
+            println!("    upload:");
+            println!("      target: \"//input[@type='file'][@multiple]\"");
+            println!("      files: [\"/path/1.jpg\", \"/path/2.jpg\"]");
+        }
+        "drag" => {
+            println!("drag - Examples");
+            println!();
+            println!("Drag and drop:");
+            println!("    drag:");
+            println!("      source: \"//div[@id='item1']\"");
+            println!("      to: \"//div[@id='dropzone']\"");
+        }
+        "scroll" => {
+            println!("scroll - Examples");
+            println!();
+            println!("Scroll to bottom:");
+            println!("    scroll:");
+            println!("      target: \"//div[@class='scrollable']\"");
+            println!("      y: 10000");
+            println!();
+            println!("Scroll to specific position:");
+            println!("    scroll:");
+            println!("      target: \"//div[@id='panel']\"");
+            println!("      x: 500");
+            println!("      y: 300");
+        }
+        "dialog" => {
+            println!("dialog - Examples");
+            println!();
+            println!("Accept alert/confirm:");
+            println!("    dialog: accept");
+            println!();
+            println!("Dismiss confirm:");
+            println!("    dialog: dismiss");
+            println!();
+            println!("Respond to prompt:");
+            println!("    dialog:");
+            println!("      mode: prompt");
+            println!("      prompt_text: \"My response\"");
+        }
+        "download" => {
+            println!("download - Examples");
+            println!();
+            println!("Download file:");
+            println!("    download:");
+            println!("      path: \"/downloads/file.pdf\"");
+            println!("      to: DOWNLOAD_PATH");
+        }
+        "log" => {
+            println!("log - Examples");
+            println!();
+            println!("Log message:");
+            println!("    log: \"Starting login flow\"");
+        }
+        "call" => {
+            println!("call - Examples");
+            println!();
+            println!("Call another flow:");
+            println!("    call: login");
+            println!();
+            println!("Call with parameters:");
+            println!("    call:");
+            println!("      flow: login");
+            println!("      params:");
+            println!("        username: \"admin\"");
+            println!("        password: \"secret\"");
+        }
+        "js" => {
+            println!("js - Examples");
+            println!();
+            println!("Execute JS and store result:");
+            println!("    js:");
+            println!("      code: \"document.title\"");
+            println!("      to: PAGE_TITLE");
+            println!();
+            println!("Execute JS with arguments:");
+            println!("    js:");
+            println!("      code: |");
+            println!("        (selector) => document.querySelector(selector).click()");
+            println!("      # Note: use with 'call' to pass arguments");
+        }
+        "define" => {
+            println!("define - Examples");
+            println!();
+            println!("Define variable:");
+            println!("    define:");
+            println!("      var: BASE_URL");
+            println!("      value: \"https://api.example.com\"");
+            println!();
+            println!("Define with overwrite control:");
+            println!("    define:");
+            println!("      var: COUNTER");
+            println!("      value: 0");
+            println!("      overwrite: false");
+        }
+        "if" => {
+            println!("if - Examples");
+            println!();
+            println!("Check if variable defined:");
+            println!("    if:");
+            println!("      defined: USER_TOKEN");
+            println!("      then:");
+            println!("        - log: \"Already logged in\"");
+            println!("      else:");
+            println!("        - call: login");
+            println!();
+            println!("Check element visibility:");
+            println!("    if:");
+            println!("      visible: \"//div[@id='modal']\"");
+            println!("      then:");
+            println!("        - click: \"//button[@class='close']\"");
+        }
+        "for" => {
+            println!("for - Examples");
+            println!();
+            println!("Loop over list:");
+            println!("    define:");
+            println!("      var: urls");
+            println!("      value: [\"a.com\", \"b.com\", \"c.com\"]");
+            println!("    for:");
+            println!("      items: urls");
+            println!("      as: url");
+            println!("      do:");
+            println!("        - goto: url");
+            println!("        - wait: 1000");
+            println!();
+            println!("Loop N times:");
+            println!("    for:");
+            println!("      count: 3");
+            println!("      as: i");
+            println!("      do:");
+            println!("        - click: \"//button[@class='load-more']\"");
+            println!("        - wait: 2000");
+        }
+        "while" => {
+            println!("while - Examples");
+            println!();
+            println!("Loop while element exists:");
+            println!("    while:");
+            println!("      condition:");
+            println!("        visible: \"//button[@class='load-more']\"");
+            println!("      max: 10");
+            println!("      do:");
+            println!("        - click: \"//button[@class='load-more']\"");
+            println!("        - wait: 2000");
+        }
+        "retry" => {
+            println!("retry - Examples");
+            println!();
+            println!("Retry click up to 3 times:");
+            println!("    retry:");
+            println!("      attempts: 3");
+            println!("      interval: 1000");
+            println!("      do:");
+            println!("        - click: \"//button[@id='flaky']\"");
+        }
+        "assert" => {
+            println!("assert - Examples");
+            println!();
+            println!("Assert element visible:");
+            println!("    assert:");
+            println!("      condition:");
+            println!("        visible: \"//div[@class='success']\"");
+            println!("      message: \"Login failed - success message not shown\"");
+        }
+        "return" => {
+            println!("return - Examples");
+            println!();
+            println!("Return values from flow:");
+            println!("    return:");
+            println!("      user_id: 123");
+            println!("      token: \"abc123\"");
+        }
+        "fail" => {
+            println!("fail - Examples");
+            println!();
+            println!("Fail with custom message:");
+            println!("    fail: \"Critical element not found\"");
+        }
+        "save" => {
+            println!("save - Examples");
+            println!();
+            println!("Save session to file:");
+            println!("    save: \"session.yml\"");
+        }
+        "load" => {
+            println!("load - Examples");
+            println!();
+            println!("Load session from file:");
+            println!("    load: \"session.yml\"");
+        }
+        "request" => {
+            println!("request - Examples");
+            println!();
+            println!("GET request:");
+            println!("    request:");
+            println!("      url: \"https://api.example.com/users\"");
+            println!("      to: API_RESPONSE");
+            println!();
+            println!("POST request with JSON body:");
+            println!("    request:");
+            println!("      url: \"https://api.example.com/login\"");
+            println!("      method: POST");
+            println!("      headers:");
+            println!("        Content-Type: application/json");
+            println!("      body: '{{\"username\":\"admin\",\"password\":\"secret\"}}'");
+            println!("      to: LOGIN_RESPONSE");
+        }
+        "tab" => {
+            println!("tab - Examples");
+            println!();
+            println!("Switch to tab 1 (0-indexed):");
+            println!("    tab: 1");
+            println!();
+            println!("Close current tab:");
+            println!("    tab:");
+            println!("      close: true");
+        }
+        "cli" => {
+            println!("CLI Commands - Examples");
+            println!();
+            println!("Run a flow:");
+            println!("    bcl run script.yml");
+            println!();
+            println!("Run specific target:");
+            println!("    bcl run script.yml -t login");
+            println!();
+            println!("Validate YAML:");
+            println!("    bcl validate script.yml");
+            println!();
+            println!("List flows:");
+            println!("    bcl list script.yml");
+            println!();
+            println!("Compile to script:");
+            println!("    bcl compile script.yml");
+            println!();
+            println!("Execute single action:");
+            println!("    bcl exec goto https://example.com");
+        }
+        "run" | "validate" | "list" | "compile" | "exec" | "help" => {
+            // Show CLI command examples for these commands
+            print_cli_command_examples(command);
+        }
+        _ => {
+            eprintln!("Unknown action: {}", command);
+            eprintln!("Run 'bcl help' for a list of available actions.");
+            std::process::exit(1);
+        }
+    }
 }
 
 fn main() {
@@ -640,6 +1722,18 @@ fn main() {
         Cli::Exec(ref args) => tokio::runtime::Runtime::new()
             .unwrap()
             .block_on(exec_action(args)),
+        Cli::Help(ref help_args) => {
+            if let Some(ref command) = help_args.command {
+                if help_args.examples {
+                    print_command_examples(command);
+                } else {
+                    print_command_help(command);
+                }
+            } else {
+                print_command_summary();
+            }
+            Ok(())
+        }
     };
 
     if let Err(e) = result {
