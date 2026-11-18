@@ -1047,7 +1047,226 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
             }
             Ok(Some(Action::Server { base_path, port, ws_url, routes }))
         }
+        "screenshot" => {
+            let mut path = parse_string_value(first_val).ok().filter(|p| !p.is_empty());
+            let mut to = None;
+            let mut format = None;
+            let mut quality = None;
+            let mut full_page = false;
+            for (key, val) in action_options(first_val, &action_keys, &action_values) {
+                match key.as_str() {
+                    "path" => path = parse_string_value(&val).ok(),
+                    "to" => to = parse_string_value(&val).ok(),
+                    "format" => format = parse_string_value(&val).ok(),
+                    "quality" => quality = parse_u64_value(&val).map(|n| n as u8),
+                    "full_page" => full_page = parse_bool_value(&val).unwrap_or(false),
+                    _ => {}
+                }
+            }
+            if path.is_none() && to.is_none() {
+                return Err(Error::InvalidAction("screenshot requires 'path' or 'to'".to_string()));
+            }
+            Ok(Some(Action::Screenshot { path, to, format, quality, full_page }))
+        }
+        "back" => Ok(Some(Action::Back)),
+        "forward" => Ok(Some(Action::Forward)),
+        "reload" => {
+            let mut ignore_cache = parse_bool_value(first_val).unwrap_or(false);
+            for (key, val) in action_options(first_val, &action_keys, &action_values) {
+                if key == "ignore_cache" {
+                    ignore_cache = parse_bool_value(&val).unwrap_or(false);
+                }
+            }
+            Ok(Some(Action::Reload { ignore_cache }))
+        }
+        "viewport" => {
+            let mut width = parse_u64_value(first_val);
+            let mut height = None;
+            let mut device_scale_factor = None;
+            let mut mobile = false;
+            let mut reset = false;
+            for (key, val) in action_options(first_val, &action_keys, &action_values) {
+                match key.as_str() {
+                    "width" => width = parse_u64_value(&val),
+                    "height" => height = parse_u64_value(&val),
+                    "device_scale_factor" => device_scale_factor = parse_f64_value(&val),
+                    "mobile" => mobile = parse_bool_value(&val).unwrap_or(false),
+                    "reset" => reset = parse_bool_value(&val).unwrap_or(false),
+                    _ => {}
+                }
+            }
+            if !reset && (width.is_none() || height.is_none()) {
+                return Err(Error::InvalidAction("viewport requires 'width' and 'height'".to_string()));
+            }
+            Ok(Some(Action::Viewport {
+                width: width.unwrap_or(0),
+                height: height.unwrap_or(0),
+                device_scale_factor,
+                mobile,
+                reset,
+            }))
+        }
+        "cookies" => {
+            let mut action = parse_string_value(first_val).ok().filter(|a| !a.is_empty());
+            let mut name = None;
+            let mut value = None;
+            let mut url = None;
+            let mut domain = None;
+            let mut path = None;
+            let mut to = None;
+            for (key, val) in action_options(first_val, &action_keys, &action_values) {
+                match key.as_str() {
+                    "action" => action = parse_string_value(&val).ok(),
+                    "name" => name = parse_string_value(&val).ok(),
+                    "value" => value = parse_string_value(&val).ok(),
+                    "url" => url = parse_string_value(&val).ok(),
+                    "domain" => domain = parse_string_value(&val).ok(),
+                    "path" => path = parse_string_value(&val).ok(),
+                    "to" => to = parse_string_value(&val).ok(),
+                    _ => {}
+                }
+            }
+            let action = action.unwrap_or_else(|| "get".to_string()).to_lowercase();
+            let action = match action.as_str() {
+                "get" | "list" => "get",
+                "set" | "add" => "set",
+                "delete" | "remove" => "delete",
+                "clear" | "clear_all" => "clear",
+                other => return Err(Error::InvalidAction(format!("unknown cookies action: {}", other))),
+            };
+            Ok(Some(Action::Cookies {
+                action: action.to_string(),
+                name,
+                value,
+                url,
+                domain,
+                path,
+                to,
+            }))
+        }
+        "headers" => {
+            let mut values = std::collections::HashMap::new();
+            let mut action = String::new();
+            match first_val {
+                serde_yaml::Value::Mapping(map) => {
+                    for (k, v) in map {
+                        if let serde_yaml::Value::String(key) = k {
+                            if key == "action" || key == "values" {
+                                continue;
+                            }
+                            values.insert(key.clone(), scalar_to_string(v));
+                        }
+                    }
+                }
+                serde_yaml::Value::String(s) => {
+                    if s.trim().eq_ignore_ascii_case("clear") {
+                        action = "clear".to_string();
+                    } else if !s.trim().is_empty() {
+                        if let Some(map) = parse_string_map(first_val) {
+                            values = map;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            for (key, val) in action_options(first_val, &action_keys, &action_values) {
+                match key.as_str() {
+                    "action" => action = parse_string_value(&val).unwrap_or_default(),
+                    "clear" => {
+                        if parse_bool_value(&val).unwrap_or(false) {
+                            action = "clear".to_string();
+                        }
+                    }
+                    "values" => {
+                        if let Some(map) = parse_string_map(&val) {
+                            values = map;
+                        }
+                    }
+                    other => {
+                        values.insert(other.to_string(), scalar_to_string(&val));
+                    }
+                }
+            }
+            if action.is_empty() {
+                action = "set".to_string();
+            }
+            Ok(Some(Action::Headers { action: Some(action), values }))
+        }
         _ => Err(Error::InvalidAction(format!("Unknown action: {}", first_key))),
+    }
+}
+
+fn action_options(
+    first_val: &serde_yaml::Value,
+    action_keys: &[String],
+    action_values: &[serde_yaml::Value],
+) -> Vec<(String, serde_yaml::Value)> {
+    let mut options = Vec::new();
+    if let serde_yaml::Value::Mapping(map) = first_val {
+        for (k, v) in map {
+            if let serde_yaml::Value::String(key) = k {
+                options.push((key.clone(), v.clone()));
+            }
+        }
+    }
+    for (key, value) in action_keys.iter().zip(action_values.iter()).skip(1) {
+        options.push((key.clone(), value.clone()));
+    }
+    options
+}
+
+fn parse_u64_value(value: &serde_yaml::Value) -> Option<u64> {
+    match value {
+        serde_yaml::Value::Number(n) => n.as_u64(),
+        serde_yaml::Value::String(s) => s.parse().ok(),
+        _ => None,
+    }
+}
+
+fn parse_f64_value(value: &serde_yaml::Value) -> Option<f64> {
+    match value {
+        serde_yaml::Value::Number(n) => n.as_f64(),
+        serde_yaml::Value::String(s) => s.parse().ok(),
+        _ => None,
+    }
+}
+
+fn scalar_to_string(value: &serde_yaml::Value) -> String {
+    match value {
+        serde_yaml::Value::String(s) => s.clone(),
+        serde_yaml::Value::Number(n) => n.to_string(),
+        serde_yaml::Value::Bool(b) => b.to_string(),
+        _ => String::new(),
+    }
+}
+
+fn parse_string_map(value: &serde_yaml::Value) -> Option<std::collections::HashMap<String, String>> {
+    match value {
+        serde_yaml::Value::Mapping(map) => Some(
+            map.iter()
+                .map(|(k, v)| (scalar_to_string(k), scalar_to_string(v)))
+                .collect(),
+        ),
+        serde_yaml::Value::String(s) => {
+            let trimmed = s.trim();
+            if trimmed.starts_with('{') {
+                let json: serde_json::Value = serde_json::from_str(trimmed).ok()?;
+                match json {
+                    serde_json::Value::Object(map) => Some(
+                        map.into_iter()
+                            .map(|(k, v)| {
+                                let yaml = serde_yaml::to_value(v).unwrap_or(serde_yaml::Value::Null);
+                                (k, scalar_to_string(&yaml))
+                            })
+                            .collect(),
+                    ),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }
+        _ => None,
     }
 }
 
@@ -2199,6 +2418,184 @@ test:
                 assert_eq!(then.len(), 1);
             }
             _ => panic!("Expected If action"),
+        }
+    }
+
+    #[test]
+    fn test_parse_screenshot_with_options() {
+        let yaml = r##"
+test:
+  - screenshot: /tmp/page.png
+    format: jpeg
+    quality: 80
+    full_page: true
+"##;
+        let flow_file = parse_str(yaml).unwrap();
+        let actions = flow_file.get("test").unwrap();
+        match &actions[0] {
+            Action::Screenshot { path, format, quality, full_page, .. } => {
+                assert_eq!(path.as_deref(), Some("/tmp/page.png"));
+                assert_eq!(format.as_deref(), Some("jpeg"));
+                assert_eq!(*quality, Some(80));
+                assert!(*full_page);
+            }
+            _ => panic!("Expected Screenshot action"),
+        }
+    }
+
+    #[test]
+    fn test_parse_screenshot_to_variable() {
+        let yaml = r##"
+test:
+  - screenshot:
+      full_page: true
+      to: SHOT
+"##;
+        let flow_file = parse_str(yaml).unwrap();
+        let actions = flow_file.get("test").unwrap();
+        match &actions[0] {
+            Action::Screenshot { path, to, full_page, .. } => {
+                assert!(path.is_none());
+                assert_eq!(to.as_deref(), Some("SHOT"));
+                assert!(*full_page);
+            }
+            _ => panic!("Expected Screenshot action"),
+        }
+    }
+
+    #[test]
+    fn test_parse_navigation_actions() {
+        let yaml = r##"
+test:
+  - back:
+  - forward:
+  - reload:
+      ignore_cache: true
+"##;
+        let flow_file = parse_str(yaml).unwrap();
+        let actions = flow_file.get("test").unwrap();
+        assert_eq!(actions.len(), 3);
+        assert!(matches!(actions[0], Action::Back));
+        assert!(matches!(actions[1], Action::Forward));
+        match &actions[2] {
+            Action::Reload { ignore_cache } => assert!(*ignore_cache),
+            _ => panic!("Expected Reload action"),
+        }
+    }
+
+    #[test]
+    fn test_parse_viewport() {
+        let yaml = r##"
+test:
+  - viewport:
+      width: 1280
+      height: 720
+      device_scale_factor: 2
+      mobile: true
+"##;
+        let flow_file = parse_str(yaml).unwrap();
+        let actions = flow_file.get("test").unwrap();
+        match &actions[0] {
+            Action::Viewport { width, height, device_scale_factor, mobile, reset } => {
+                assert_eq!(*width, 1280);
+                assert_eq!(*height, 720);
+                assert_eq!(*device_scale_factor, Some(2.0));
+                assert!(*mobile);
+                assert!(!*reset);
+            }
+            _ => panic!("Expected Viewport action"),
+        }
+    }
+
+    #[test]
+    fn test_parse_viewport_reset() {
+        let yaml = r##"
+test:
+  - viewport:
+      reset: true
+"##;
+        let flow_file = parse_str(yaml).unwrap();
+        let actions = flow_file.get("test").unwrap();
+        match &actions[0] {
+            Action::Viewport { reset, .. } => assert!(*reset),
+            _ => panic!("Expected Viewport action"),
+        }
+    }
+
+    #[test]
+    fn test_parse_cookies_get_and_set() {
+        let yaml = r##"
+test:
+  - cookies: get
+    to: COOKIES
+  - cookies:
+      action: set
+      name: session
+      value: abc123
+      url: https://example.com
+"##;
+        let flow_file = parse_str(yaml).unwrap();
+        let actions = flow_file.get("test").unwrap();
+        assert_eq!(actions.len(), 2);
+        match &actions[0] {
+            Action::Cookies { action, to, .. } => {
+                assert_eq!(action, "get");
+                assert_eq!(to.as_deref(), Some("COOKIES"));
+            }
+            _ => panic!("Expected Cookies action"),
+        }
+        match &actions[1] {
+            Action::Cookies { action, name, value, url, .. } => {
+                assert_eq!(action, "set");
+                assert_eq!(name.as_deref(), Some("session"));
+                assert_eq!(value.as_deref(), Some("abc123"));
+                assert_eq!(url.as_deref(), Some("https://example.com"));
+            }
+            _ => panic!("Expected Cookies action"),
+        }
+    }
+
+    #[test]
+    fn test_parse_headers_mapping_and_clear() {
+        let yaml = r##"
+test:
+  - headers:
+      X-API-Key: secret
+      Accept: application/json
+  - headers: clear
+"##;
+        let flow_file = parse_str(yaml).unwrap();
+        let actions = flow_file.get("test").unwrap();
+        assert_eq!(actions.len(), 2);
+        match &actions[0] {
+            Action::Headers { action, values } => {
+                assert_eq!(action.as_deref(), Some("set"));
+                assert_eq!(values.get("X-API-Key").map(String::as_str), Some("secret"));
+            }
+            _ => panic!("Expected Headers action"),
+        }
+        match &actions[1] {
+            Action::Headers { action, values } => {
+                assert_eq!(action.as_deref(), Some("clear"));
+                assert!(values.is_empty());
+            }
+            _ => panic!("Expected Headers action"),
+        }
+    }
+
+    #[test]
+    fn test_parse_headers_from_json_value() {
+        let yaml = r##"
+test:
+  - headers: '{"X-API-Key":"secret"}'
+"##;
+        let flow_file = parse_str(yaml).unwrap();
+        let actions = flow_file.get("test").unwrap();
+        match &actions[0] {
+            Action::Headers { values, .. } => {
+                assert_eq!(values.get("X-API-Key").map(String::as_str), Some("secret"));
+            }
+            _ => panic!("Expected Headers action"),
         }
     }
 }

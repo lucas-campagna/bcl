@@ -34,6 +34,13 @@
 | `load` | Load context from a JSON file |
 | `dialog` | Auto-handle browser dialogs |
 | `download` | Wait for and save a file download |
+| `screenshot` | Capture a screenshot to a file or variable |
+| `back` | Navigate back in browser history |
+| `forward` | Navigate forward in browser history |
+| `reload` | Reload the current page |
+| `viewport` | Set or reset the browser viewport |
+| `cookies` | Get, set, delete, or clear cookies |
+| `headers` | Set or clear extra HTTP headers |
 | `request` | Make HTTP requests |
 
 ## Action Details
@@ -283,6 +290,160 @@ Wait for a file download and save it to a path:
 ```
 
 The `to` field is optional — if provided, the save path is stored in the named variable.
+
+### screenshot
+
+Capture a screenshot. Use `path` to write a file, `to` to store the base64 payload in a variable, or both:
+
+```yaml
+# save a viewport screenshot
+- screenshot: ./page.png
+
+# capture the full page and store the base64 data
+- screenshot:
+    full_page: true
+    to: SCREENSHOT_B64
+
+# JPEG with quality (PNG is the default)
+- screenshot: ./page.jpg
+  format: jpeg
+  quality: 80
+```
+
+**Fields:**
+- `path` (or the action value) — output file path; optional when `to` is set
+- `to` — variable name for the base64 screenshot data
+- `format` — `png` (default) or `jpeg`
+- `quality` — JPEG quality from 0–100
+- `full_page` — capture the full scrollable page instead of just the viewport
+
+CLI examples:
+
+```bash
+bcl exec screenshot ./page.png
+bcl exec screenshot --full_page true --to SCREENSHOT_B64
+```
+
+### back / forward
+
+Move through the browser's navigation history:
+
+```yaml
+- back:
+- forward:
+```
+
+CLI examples:
+
+```bash
+bcl exec back
+bcl exec forward
+```
+
+### reload
+
+Reload the current page. Set `ignore_cache` to bypass the browser cache:
+
+```yaml
+- reload:
+- reload:
+    ignore_cache: true
+```
+
+CLI example:
+
+```bash
+bcl exec reload --ignore_cache true
+```
+
+### viewport
+
+Set the browser viewport, or restore the default with `reset: true`:
+
+```yaml
+- viewport:
+    width: 1280
+    height: 720
+    device_scale_factor: 2
+    mobile: false
+
+- viewport:
+    reset: true
+```
+
+**Fields:**
+- `width` / `height` — viewport dimensions in pixels; required unless `reset` is true
+- `device_scale_factor` — device pixel ratio (default: 1)
+- `mobile` — enable mobile emulation (default: false)
+- `reset` — clear the viewport override and restore the default
+
+CLI example:
+
+```bash
+bcl exec viewport 1280 --height 720 --device_scale_factor 2
+```
+
+### cookies
+
+Get, set, delete, or clear cookies. `get` stores a JSON value in the variable named by `to`:
+
+```yaml
+# read cookies for the current page URL
+- cookies: get
+  to: COOKIES
+
+# set a cookie
+- cookies:
+    action: set
+    name: session
+    value: abc123
+    url: https://example.com
+
+# delete one cookie
+- cookies:
+    action: delete
+    name: session
+    url: https://example.com
+
+# clear all browser cookies
+- cookies: clear
+```
+
+**Fields:**
+- `action` (or the action value) — `get`, `set`, `delete`, or `clear` (default: `get`)
+- `name` / `value` — cookie name and value; `name` is required for `set` and `delete`
+- `url` — restrict the operation to a URL; when omitted for `get`, all cookies are returned
+- `domain` / `path` — optional cookie scope
+- `to` — variable name for cookies returned by `get`
+
+Aliases `list`, `add`, `remove`, and `clear_all` are also accepted.
+
+CLI examples:
+
+```bash
+bcl exec cookies get --to COOKIES
+bcl exec cookies set --name session --value abc123 --url https://example.com
+bcl exec cookies clear
+```
+
+### headers
+
+Set extra HTTP headers for browser requests, or clear them. A YAML mapping sets headers directly; `clear` removes all extra headers:
+
+```yaml
+- headers:
+    X-API-Key: secret
+    Accept: application/json
+
+- headers: clear
+```
+
+In `bcl exec`, pass a JSON object as the action value:
+
+```bash
+bcl exec headers '{"X-API-Key":"secret","Accept":"application/json"}'
+bcl exec headers clear
+```
 
 ### for
 

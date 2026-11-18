@@ -46,7 +46,7 @@ pub fn page_is_navigated(page: &Arc<crate::cdp::Page>) -> bool {
 
 pub async fn ensure_page_initialized(page: &Arc<crate::cdp::Page>) -> Result<(), Error> {
     if page.url().is_empty() {
-        page.reload(None)
+        page.reload(false)
             .await
             .map_err(|e| Error::ActionFailed(format!("Failed to reload page: {}", e)))?;
     }

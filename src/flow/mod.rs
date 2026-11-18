@@ -205,6 +205,38 @@ pub enum Action {
         #[serde(default)] timeout: Option<u64>,
         #[serde(default)] to: Option<String>,
     },
+    Screenshot {
+        path: Option<String>,
+        #[serde(default)] to: Option<String>,
+        #[serde(default)] format: Option<String>,
+        #[serde(default)] quality: Option<u8>,
+        #[serde(default)] full_page: bool,
+    },
+    Back,
+    Forward,
+    Reload {
+        #[serde(default)] ignore_cache: bool,
+    },
+    Viewport {
+        width: u64,
+        height: u64,
+        #[serde(default)] device_scale_factor: Option<f64>,
+        #[serde(default)] mobile: bool,
+        #[serde(default)] reset: bool,
+    },
+    Cookies {
+        action: String,
+        #[serde(default)] name: Option<String>,
+        #[serde(default)] value: Option<String>,
+        #[serde(default)] url: Option<String>,
+        #[serde(default)] domain: Option<String>,
+        #[serde(default)] path: Option<String>,
+        #[serde(default)] to: Option<String>,
+    },
+    Headers {
+        #[serde(default)] action: Option<String>,
+        #[serde(default)] values: std::collections::HashMap<String, String>,
+    },
     For {
         items: serde_yaml::Value,
         as_: String,

@@ -125,3 +125,27 @@ pub struct ConnectOptions;
 
 #[derive(Debug, Clone, Default)]
 pub struct ConnectOverCdpOptions;
+
+#[derive(Debug, Clone, Default)]
+pub struct ScreenshotOptions {
+    pub format: Option<String>,
+    pub quality: Option<u8>,
+    pub full_page: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ViewportOptions {
+    pub width: u64,
+    pub height: u64,
+    pub device_scale_factor: Option<f64>,
+    pub mobile: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CookieOptions {
+    pub name: Option<String>,
+    pub value: Option<String>,
+    pub url: Option<String>,
+    pub domain: Option<String>,
+    pub path: Option<String>,
+}

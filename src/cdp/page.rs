@@ -3,13 +3,14 @@ use crate::cdp::dialog::Dialog;
 use crate::cdp::download::Download;
 use crate::cdp::locator::Locator;
 use crate::cdp::options::{
-    CheckOptions, ClickOptions, DblClickOptions, FilterOptions, GotoOptions, HoverOptions,
-    InputFiles, KeyboardPressOptions, PageCloseOptions, SelectOptionOptions, SelectOptionValue,
-    SetInputFilesOptions, WaitOptions,
+    CheckOptions, ClickOptions, CookieOptions, DblClickOptions, FilterOptions, GotoOptions,
+    HoverOptions, InputFiles, KeyboardPressOptions, PageCloseOptions, ScreenshotOptions,
+    SelectOptionOptions, SelectOptionValue, SetInputFilesOptions, ViewportOptions, WaitOptions,
 };
 use crate::cdp::protocol::{SerializedArgument, SerializedValue, SpecialValue};
 use crate::error::Error;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -202,6 +203,7 @@ impl Page {
         let _ = client.send("Page.enable", None).await;
         let _ = client.send("Runtime.enable", None).await;
         let _ = client.send("DOM.enable", None).await;
+        let _ = client.send("Network.enable", None).await;
 
         page.setup_downloads().await;
         page.spawn_url_listener();
@@ -346,11 +348,192 @@ impl Page {
         }
     }
 
-    pub async fn reload(&self, _opts: Option<GotoOptions>) -> Result<(), Error> {
+    pub async fn reload(&self, ignore_cache: bool) -> Result<(), Error> {
         self.client
-            .send("Page.reload", Some(json!({ "ignoreCache": false })))
+            .send("Page.reload", Some(json!({ "ignoreCache": ignore_cache })))
             .await?;
         self.refresh_url().await;
+        Ok(())
+    }
+
+    pub async fn go_back(&self) -> Result<(), Error> {
+        self.navigate_history(-1).await
+    }
+
+    pub async fn go_forward(&self) -> Result<(), Error> {
+        self.navigate_history(1).await
+    }
+
+    async fn navigate_history(&self, delta: isize) -> Result<(), Error> {
+        let history = self
+            .client
+            .send("Page.getNavigationHistory", None)
+            .await?;
+        let index = history
+            .get("currentIndex")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as isize;
+        let entries = history
+            .get("entries")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| Error::ActionFailed("navigation history is unavailable".to_string()))?;
+        let target = index + delta;
+        if target < 0 || target >= entries.len() as isize {
+            return Err(Error::ActionFailed(if delta < 0 {
+                "no previous history entry".to_string()
+            } else {
+                "no next history entry".to_string()
+            }));
+        }
+        let entry_id = entries[target as usize]
+            .get("id")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| Error::ActionFailed("history entry has no id".to_string()))?;
+        self.client
+            .send("Page.navigateToHistoryEntry", Some(json!({ "entryId": entry_id })))
+            .await?;
+        self.refresh_url().await;
+        Ok(())
+    }
+
+    pub async fn screenshot(&self, opts: ScreenshotOptions) -> Result<(Vec<u8>, String), Error> {
+        let format = opts.format.unwrap_or_else(|| "png".to_string());
+        let mut params = json!({
+            "format": format,
+            "captureBeyondViewport": opts.full_page,
+        });
+
+        if opts.full_page {
+            let metrics = self.client.send("Page.getLayoutMetrics", None).await?;
+            let width = metrics
+                .pointer("/cssContentSize/width")
+                .and_then(|v| v.as_f64())
+                .or_else(|| metrics.pointer("/contentSize/width").and_then(|v| v.as_f64()))
+                .unwrap_or(0.0);
+            let height = metrics
+                .pointer("/cssContentSize/height")
+                .and_then(|v| v.as_f64())
+                .or_else(|| metrics.pointer("/contentSize/height").and_then(|v| v.as_f64()))
+                .unwrap_or(0.0);
+            if width > 0.0 && height > 0.0 {
+                params["clip"] = json!({
+                    "x": 0,
+                    "y": 0,
+                    "width": width,
+                    "height": height,
+                    "scale": 1,
+                });
+            }
+        }
+
+        if format == "jpeg" {
+            if let Some(quality) = opts.quality {
+                params["quality"] = json!(quality);
+            }
+        }
+
+        let result = self
+            .client
+            .send("Page.captureScreenshot", Some(params))
+            .await?;
+        let data = result
+            .get("data")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| Error::ActionFailed("screenshot returned no data".to_string()))?;
+        let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data)
+            .map_err(|e| Error::ActionFailed(format!("Invalid screenshot data: {}", e)))?;
+        Ok((bytes, data.to_string()))
+    }
+
+    pub async fn set_viewport(&self, opts: ViewportOptions) -> Result<(), Error> {
+        let params = json!({
+            "width": opts.width,
+            "height": opts.height,
+            "deviceScaleFactor": opts.device_scale_factor.unwrap_or(1.0),
+            "mobile": opts.mobile,
+        });
+        self.client
+            .send("Emulation.setDeviceMetricsOverride", Some(params))
+            .await?;
+        Ok(())
+    }
+
+    pub async fn reset_viewport(&self) -> Result<(), Error> {
+        self.client
+            .send("Emulation.clearDeviceMetricsOverride", None)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn get_cookies(&self, urls: Option<Vec<String>>) -> Result<Value, Error> {
+        let params = match urls {
+            Some(urls) => json!({ "urls": urls }),
+            None => json!({}),
+        };
+        let result = self.client.send("Network.getCookies", Some(params)).await?;
+        Ok(result.get("cookies").cloned().unwrap_or_else(|| json!([])))
+    }
+
+    pub async fn set_cookie(&self, opts: &CookieOptions) -> Result<(), Error> {
+        let name = opts
+            .name
+            .as_deref()
+            .ok_or_else(|| Error::InvalidInput("cookies set requires 'name'".to_string()))?;
+        let mut params = json!({ "name": name });
+        if let Some(value) = &opts.value {
+            params["value"] = json!(value);
+        }
+        if let Some(url) = &opts.url {
+            params["url"] = json!(url);
+        }
+        if let Some(domain) = &opts.domain {
+            params["domain"] = json!(domain);
+        }
+        if let Some(path) = &opts.path {
+            params["path"] = json!(path);
+        }
+        self.client.send("Network.setCookie", Some(params)).await?;
+        Ok(())
+    }
+
+    pub async fn delete_cookie(&self, opts: &CookieOptions) -> Result<(), Error> {
+        let name = opts
+            .name
+            .as_deref()
+            .ok_or_else(|| Error::InvalidInput("cookies delete requires 'name'".to_string()))?;
+        let mut params = json!({ "name": name });
+        if let Some(url) = &opts.url {
+            params["url"] = json!(url);
+        }
+        if let Some(domain) = &opts.domain {
+            params["domain"] = json!(domain);
+        }
+        if let Some(path) = &opts.path {
+            params["path"] = json!(path);
+        }
+        self.client.send("Network.deleteCookies", Some(params)).await?;
+        Ok(())
+    }
+
+    pub async fn clear_cookies(&self) -> Result<(), Error> {
+        self.client.send("Network.clearBrowserCookies", None).await?;
+        Ok(())
+    }
+
+    pub async fn set_extra_headers(&self, headers: &HashMap<String, String>) -> Result<(), Error> {
+        self.client
+            .send("Network.setExtraHTTPHeaders", Some(json!({ "headers": headers })))
+            .await?;
+        Ok(())
+    }
+
+    pub async fn clear_extra_headers(&self) -> Result<(), Error> {
+        self.client
+            .send(
+                "Network.setExtraHTTPHeaders",
+                Some(json!({ "headers": {} })),
+            )
+            .await?;
         Ok(())
     }
 
@@ -738,5 +921,223 @@ impl Keyboard {
         }
         self.client.send("Input.dispatchKeyEvent", Some(up)).await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio::net::TcpListener;
+    use tokio::sync::mpsc;
+    use tokio_tungstenite::accept_async;
+    use tokio_tungstenite::tungstenite::Message;
+
+    async fn mock_page() -> (Arc<Page>, mpsc::UnboundedReceiver<Value>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = mpsc::unbounded_channel();
+
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+            while let Some(Ok(msg)) = ws.next().await {
+                let text = match msg {
+                    Message::Text(text) => text,
+                    _ => continue,
+                };
+                let request: Value = match serde_json::from_str(&text) {
+                    Ok(request) => request,
+                    Err(_) => continue,
+                };
+                let id = match request.get("id") {
+                    Some(id) => id.clone(),
+                    None => continue,
+                };
+                let method = request.get("method").and_then(|m| m.as_str()).unwrap_or("");
+                let _ = tx.send(request.clone());
+                let result = match method {
+                    "Page.getLayoutMetrics" => {
+                        json!({ "cssContentSize": { "width": 800.0, "height": 1600.0 } })
+                    }
+                    "Page.getNavigationHistory" => json!({
+                        "currentIndex": 1,
+                        "entries": [{ "id": 10 }, { "id": 20 }, { "id": 30 }],
+                    }),
+                    "Page.captureScreenshot" => json!({ "data": "aGVsbG8=" }),
+                    "Network.getCookies" => {
+                        json!({ "cookies": [{ "name": "session", "value": "abc" }] })
+                    }
+                    _ => json!({}),
+                };
+                let _ = ws
+                    .send(Message::Text(json!({ "id": id, "result": result }).to_string()))
+                    .await;
+            }
+        });
+
+        let client = CdpClient::connect(&format!("ws://{}", addr), "target".to_string())
+            .await
+            .unwrap();
+        let page = Page::new(client).await.unwrap();
+        (page, rx)
+    }
+
+    async fn take_requests(rx: &mut mpsc::UnboundedReceiver<Value>) -> Vec<Value> {
+        let mut requests = Vec::new();
+        while let Ok(Some(request)) =
+            tokio::time::timeout(Duration::from_millis(20), rx.recv()).await
+        {
+            requests.push(request);
+        }
+        requests
+    }
+
+    fn find_request<'a>(requests: &'a [Value], method: &str) -> &'a Value {
+        requests
+            .iter()
+            .find(|r| r.get("method").and_then(|m| m.as_str()) == Some(method))
+            .unwrap_or_else(|| panic!("missing request: {}", method))
+    }
+
+    #[tokio::test]
+    async fn screenshot_captures_full_page_and_decodes_data() {
+        let (page, mut rx) = mock_page().await;
+        let _ = take_requests(&mut rx).await;
+
+        let (bytes, data) = page
+            .screenshot(ScreenshotOptions {
+                format: Some("png".to_string()),
+                quality: None,
+                full_page: true,
+            })
+            .await
+            .unwrap();
+        assert_eq!(bytes, b"hello");
+        assert_eq!(data, "aGVsbG8=");
+
+        let requests = take_requests(&mut rx).await;
+        assert!(requests
+            .iter()
+            .any(|r| r.get("method").and_then(|m| m.as_str()) == Some("Page.getLayoutMetrics")));
+        let capture = find_request(&requests, "Page.captureScreenshot");
+        assert_eq!(capture.pointer("/params/format").and_then(|v| v.as_str()), Some("png"));
+        assert_eq!(
+            capture.pointer("/params/clip/height").and_then(|v| v.as_f64()),
+            Some(1600.0)
+        );
+    }
+
+    #[tokio::test]
+    async fn history_navigation_uses_adjacent_entry_ids() {
+        let (page, mut rx) = mock_page().await;
+        let _ = take_requests(&mut rx).await;
+
+        page.go_back().await.unwrap();
+        page.go_forward().await.unwrap();
+
+        let requests = take_requests(&mut rx).await;
+        let ids: Vec<i64> = requests
+            .iter()
+            .filter(|r| r.get("method").and_then(|m| m.as_str()) == Some("Page.navigateToHistoryEntry"))
+            .filter_map(|r| r.pointer("/params/entryId").and_then(|v| v.as_i64()))
+            .collect();
+        assert_eq!(ids, vec![10, 30]);
+    }
+
+    #[tokio::test]
+    async fn viewport_sets_and_clears_emulation() {
+        let (page, mut rx) = mock_page().await;
+        let _ = take_requests(&mut rx).await;
+
+        page.set_viewport(ViewportOptions {
+            width: 1280,
+            height: 720,
+            device_scale_factor: Some(2.0),
+            mobile: true,
+        })
+        .await
+        .unwrap();
+        page.reset_viewport().await.unwrap();
+
+        let requests = take_requests(&mut rx).await;
+        let set = find_request(&requests, "Emulation.setDeviceMetricsOverride");
+        assert_eq!(set.pointer("/params/width").and_then(|v| v.as_u64()), Some(1280));
+        assert_eq!(set.pointer("/params/height").and_then(|v| v.as_u64()), Some(720));
+        assert_eq!(
+            set.pointer("/params/deviceScaleFactor").and_then(|v| v.as_f64()),
+            Some(2.0)
+        );
+        assert!(requests
+            .iter()
+            .any(|r| r.get("method").and_then(|m| m.as_str()) == Some("Emulation.clearDeviceMetricsOverride")));
+    }
+
+    #[tokio::test]
+    async fn cookies_use_network_domain() {
+        let (page, mut rx) = mock_page().await;
+        let _ = take_requests(&mut rx).await;
+
+        let cookies = page
+            .get_cookies(Some(vec!["https://example.com".to_string()]))
+            .await
+            .unwrap();
+        assert_eq!(cookies[0]["name"], "session");
+        page.set_cookie(&CookieOptions {
+            name: Some("session".to_string()),
+            value: Some("abc".to_string()),
+            url: Some("https://example.com".to_string()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        page.delete_cookie(&CookieOptions {
+            name: Some("session".to_string()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        page.clear_cookies().await.unwrap();
+
+        let requests = take_requests(&mut rx).await;
+        assert_eq!(
+            find_request(&requests, "Network.getCookies").pointer("/params/urls/0").and_then(|v| v.as_str()),
+            Some("https://example.com")
+        );
+        assert_eq!(
+            find_request(&requests, "Network.setCookie").pointer("/params/name").and_then(|v| v.as_str()),
+            Some("session")
+        );
+        assert!(requests
+            .iter()
+            .any(|r| r.get("method").and_then(|m| m.as_str()) == Some("Network.deleteCookies")));
+        assert!(requests
+            .iter()
+            .any(|r| r.get("method").and_then(|m| m.as_str()) == Some("Network.clearBrowserCookies")));
+    }
+
+    #[tokio::test]
+    async fn headers_set_and_clear_extra_headers() {
+        let (page, mut rx) = mock_page().await;
+        let _ = take_requests(&mut rx).await;
+
+        let mut headers = HashMap::new();
+        headers.insert("X-Key".to_string(), "value".to_string());
+        page.set_extra_headers(&headers).await.unwrap();
+        page.clear_extra_headers().await.unwrap();
+
+        let requests = take_requests(&mut rx).await;
+        assert_eq!(
+            find_request(&requests, "Network.setExtraHTTPHeaders")
+                .pointer("/params/headers/X-Key")
+                .and_then(|v| v.as_str()),
+            Some("value")
+        );
+        let clears: Vec<&Value> = requests
+            .iter()
+            .filter(|r| r.get("method").and_then(|m| m.as_str()) == Some("Network.setExtraHTTPHeaders"))
+            .collect();
+        assert_eq!(clears.len(), 2);
+        assert_eq!(clears[1].pointer("/params/headers").and_then(|v| v.as_object()).map(|o| o.len()), Some(0));
     }
 }

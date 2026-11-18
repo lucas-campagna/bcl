@@ -2,9 +2,13 @@ use crate::error::Error;
 use crate::flow::{Action, Condition, Context, FlowFile, Selector, SelectorPath, TabTarget};
 use crate::executor::selector;
 use crate::executor::utils::{get_timeout, parse_builtin_variables, ensure_page_initialized};
-use crate::cdp::options::{InputFiles, SelectOptionOptions, SelectOptionValue, SetInputFilesOptions};
+use crate::cdp::options::{
+    CookieOptions, InputFiles, ScreenshotOptions, SelectOptionOptions, SelectOptionValue,
+    SetInputFilesOptions, ViewportOptions,
+};
 use reqwest::Client;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -384,6 +388,158 @@ pub async fn run_actions(
                     .map_err(|e| Error::ActionFailed(format!("Failed to save download: {}", e)))?;
                 if let Some(var_name) = to {
                     context.set(var_name, path);
+                }
+            }
+            Action::Screenshot { path, to, format, quality, full_page } => {
+                let current_page = page.borrow();
+                let resolved_path = path
+                    .as_ref()
+                    .map(|p| context.resolve_with_url(p, Some(&current_page.url())));
+                let opts = ScreenshotOptions {
+                    format: format.clone(),
+                    quality: *quality,
+                    full_page: *full_page,
+                };
+                let (bytes, data) = current_page
+                    .screenshot(opts)
+                    .await
+                    .map_err(|e| Error::ActionFailed(format!("Failed to take screenshot: {}", e)))?;
+                drop(current_page);
+                if let Some(path) = resolved_path.filter(|p| !p.is_empty()) {
+                    tokio::fs::write(&path, &bytes)
+                        .await
+                        .map_err(|e| Error::ActionFailed(format!("Failed to save screenshot: {}", e)))?;
+                }
+                if let Some(var_name) = to {
+                    context.set(var_name, &data);
+                }
+                if verbose {
+                    eprintln!("[EXEC] screenshot: path={:?}, to={:?}", path, to);
+                }
+            }
+            Action::Back => {
+                let current_page = page.borrow();
+                if verbose {
+                    eprintln!("[EXEC] back");
+                }
+                current_page
+                    .go_back()
+                    .await
+                    .map_err(|e| Error::ActionFailed(format!("Failed to go back: {}", e)))?;
+            }
+            Action::Forward => {
+                let current_page = page.borrow();
+                if verbose {
+                    eprintln!("[EXEC] forward");
+                }
+                current_page
+                    .go_forward()
+                    .await
+                    .map_err(|e| Error::ActionFailed(format!("Failed to go forward: {}", e)))?;
+            }
+            Action::Reload { ignore_cache } => {
+                let current_page = page.borrow();
+                if verbose {
+                    eprintln!("[EXEC] reload: ignore_cache={}", ignore_cache);
+                }
+                current_page
+                    .reload(*ignore_cache)
+                    .await
+                    .map_err(|e| Error::ActionFailed(format!("Failed to reload page: {}", e)))?;
+            }
+            Action::Viewport { width, height, device_scale_factor, mobile, reset } => {
+                let current_page = page.borrow();
+                if *reset {
+                    current_page
+                        .reset_viewport()
+                        .await
+                        .map_err(|e| Error::ActionFailed(format!("Failed to reset viewport: {}", e)))?;
+                } else {
+                    let opts = ViewportOptions {
+                        width: *width,
+                        height: *height,
+                        device_scale_factor: *device_scale_factor,
+                        mobile: *mobile,
+                    };
+                    current_page
+                        .set_viewport(opts)
+                        .await
+                        .map_err(|e| Error::ActionFailed(format!("Failed to set viewport: {}", e)))?;
+                }
+            }
+            Action::Cookies { action, name, value, url, domain, path, to } => {
+                let current_page = page.borrow();
+                let resolve_opt = |v: &Option<String>| {
+                    v.as_ref()
+                        .map(|s| context.resolve_with_url(s, Some(&current_page.url())))
+                };
+                let opts = CookieOptions {
+                    name: resolve_opt(name),
+                    value: resolve_opt(value),
+                    url: resolve_opt(url),
+                    domain: resolve_opt(domain),
+                    path: resolve_opt(path),
+                };
+                let result = match action.as_str() {
+                    "get" => {
+                        let urls = opts.url.as_ref().map(|u| vec![u.clone()]);
+                        Some(
+                            current_page
+                                .get_cookies(urls)
+                                .await
+                                .map_err(|e| Error::ActionFailed(format!("Failed to get cookies: {}", e)))?,
+                        )
+                    }
+                    "set" => {
+                        current_page
+                            .set_cookie(&opts)
+                            .await
+                            .map_err(|e| Error::ActionFailed(format!("Failed to set cookie: {}", e)))?;
+                        None
+                    }
+                    "delete" => {
+                        current_page
+                            .delete_cookie(&opts)
+                            .await
+                            .map_err(|e| Error::ActionFailed(format!("Failed to delete cookie: {}", e)))?;
+                        None
+                    }
+                    "clear" => {
+                        current_page
+                            .clear_cookies()
+                            .await
+                            .map_err(|e| Error::ActionFailed(format!("Failed to clear cookies: {}", e)))?;
+                        None
+                    }
+                    other => {
+                        return Err(Error::InvalidAction(format!("unknown cookies action: {}", other)));
+                    }
+                };
+                drop(current_page);
+                if let (Some(var_name), Some(cookies)) = (to, result) {
+                    let yaml = serde_yaml::to_value(&cookies)
+                        .unwrap_or(serde_yaml::Value::Null);
+                    context.set_yaml(var_name, yaml);
+                }
+            }
+            Action::Headers { action, values } => {
+                let current_page = page.borrow();
+                if action.as_deref().unwrap_or("set") == "clear" {
+                    current_page
+                        .clear_extra_headers()
+                        .await
+                        .map_err(|e| Error::ActionFailed(format!("Failed to clear headers: {}", e)))?;
+                } else {
+                    let mut resolved = HashMap::new();
+                    for (key, value) in values {
+                        let key = context.resolve_with_url(key, Some(&current_page.url()));
+                        let value = context.resolve_with_url(value, Some(&current_page.url()));
+                        resolved.insert(key, value);
+                    }
+                    current_page
+                        .set_extra_headers(&resolved)
+                        .await
+                        .map_err(|e| Error::ActionFailed(format!("Failed to set headers: {}", e)))?;
                 }
             }
             Action::Log { text } => {

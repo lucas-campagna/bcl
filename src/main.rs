@@ -76,7 +76,7 @@ pub struct ExecArgs {
     #[arg(value_name = "ACTION")]
     pub action: Option<String>,
     /// The action's primary value (required unless --stdin is used)
-    #[arg(value_name = "VALUE")]
+    #[arg(value_name = "VALUE", allow_hyphen_values = true)]
     pub value: Option<String>,
     /// Optional action parameters in `--name value` or `--name=value` form
     #[arg(value_name = "OPTION", num_args = 0.., allow_hyphen_values = true)]
@@ -415,12 +415,28 @@ exec bcl run -t "$FLOW_NAME" - "${{EXTRA_ARGS[@]}}" <<< "$YAML_CONTENT"
 }
 
 fn parse_exec_scalar(action: &str, field: Option<&str>, value: &str) -> anyhow::Result<serde_yaml::Value> {
+    let structured = matches!(action, "headers") || matches!(field, Some("values" | "headers"));
+    if structured {
+        let trimmed = value.trim();
+        if trimmed.starts_with('{') || trimmed.starts_with('[') {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                if let Ok(yaml) = serde_yaml::to_value(json) {
+                    return Ok(yaml);
+                }
+            }
+        }
+    }
+
     let bool_field = matches!(
         (action, field),
         ("type", Some("secret"))
             | ("read", Some("html" | "value"))
             | ("define" | "set", Some("overwrite"))
             | ("tab", Some("close"))
+            | ("screenshot", Some("full_page"))
+            | ("reload", Some("ignore_cache"))
+            | ("viewport", Some("mobile" | "reset"))
+            | ("headers", Some("clear"))
     );
     if bool_field {
         let parsed = value.parse::<bool>().map_err(|_| {
@@ -429,7 +445,11 @@ fn parse_exec_scalar(action: &str, field: Option<&str>, value: &str) -> anyhow::
         return Ok(serde_yaml::Value::Bool(parsed));
     }
 
-    let integer_field = matches!(field, Some("timeout" | "duration" | "max" | "interval" | "port"));
+    let integer_field = matches!(
+        field,
+        Some("timeout" | "duration" | "max" | "interval" | "port" | "width" | "height" | "quality")
+    );
+    let float_field = matches!(field, Some("device_scale_factor"));
     let signed_integer_field = matches!(field, Some("x" | "y"));
     let numeric_primary = field.is_none() && matches!(action, "tab" | "wait" | "retry");
     let define_value = matches!((action, field), ("define" | "set", Some("value")));
@@ -437,6 +457,10 @@ fn parse_exec_scalar(action: &str, field: Option<&str>, value: &str) -> anyhow::
     if integer_field || numeric_primary {
         if let Ok(parsed) = value.parse::<u64>() {
             return Ok(serde_yaml::Value::Number(parsed.into()));
+        }
+    } else if float_field {
+        if let Ok(parsed) = value.parse::<f64>() {
+            return Ok(serde_yaml::Value::from(parsed));
         }
     } else if signed_integer_field {
         if let Ok(parsed) = value.parse::<i64>() {
@@ -461,8 +485,15 @@ fn parse_action_line(line: &str) -> anyhow::Result<serde_yaml::Mapping> {
         return Err(anyhow::anyhow!("Empty action line"));
     }
     let action_name = &parts[0];
-    let value = parts.get(1).map(|s| s.as_str()).unwrap_or("");
-    let options: Vec<&str> = parts[2..].iter().map(|s| s.as_str()).collect();
+    let value_arg = parts.get(1).map(|s| s.as_str()).unwrap_or("");
+    let value = if value_arg.starts_with("--") { "" } else { value_arg };
+    let option_start = if value_arg.starts_with("--") { 1 } else { 2 };
+    let options: Vec<&str> = parts
+        .get(option_start..)
+        .unwrap_or(&[])
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
 
     let mut action = serde_yaml::Mapping::new();
     action.insert(
@@ -564,7 +595,15 @@ fn parse_exec_action(args: &ExecArgs) -> anyhow::Result<bcl::FlowFile> {
         }
     } else {
         let action_name = args.action.as_deref().unwrap_or("");
-        let value = args.value.as_deref().unwrap_or("");
+        let value_arg = args.value.as_deref().unwrap_or("");
+        let value = if value_arg.starts_with("--") { "" } else { value_arg };
+        let options: Vec<&str> = if value_arg.starts_with("--") {
+            std::iter::once(value_arg)
+                .chain(args.options.iter().map(String::as_str))
+                .collect()
+        } else {
+            args.options.iter().map(String::as_str).collect()
+        };
         let mut action = serde_yaml::Mapping::new();
         action.insert(
             serde_yaml::Value::String(action_name.to_string()),
@@ -572,10 +611,10 @@ fn parse_exec_action(args: &ExecArgs) -> anyhow::Result<bcl::FlowFile> {
         );
 
         let mut index = 0;
-        while index < args.options.len() {
-            let option = args.options[index]
+        while index < options.len() {
+            let option = options[index]
                 .strip_prefix("--")
-                .ok_or_else(|| anyhow::anyhow!("Expected an option beginning with '--', got {:?}", args.options[index]))?;
+                .ok_or_else(|| anyhow::anyhow!("Expected an option beginning with '--', got {:?}", options[index]))?;
             if option.is_empty() {
                 return Err(anyhow::anyhow!("Expected an option name after '--'"));
             }
@@ -583,10 +622,10 @@ fn parse_exec_action(args: &ExecArgs) -> anyhow::Result<bcl::FlowFile> {
             let (field, field_value, consumed) = if let Some((field, val)) = option.split_once('=') {
                 (field, val, 1)
             } else {
-                let val = args.options.get(index + 1).ok_or_else(|| {
-                    anyhow::anyhow!("Option '--{}' requires a value", option)
-                })?;
-                (option, val.as_str(), 2)
+                let val = options
+                    .get(index + 1)
+                    .ok_or_else(|| anyhow::anyhow!("Option '--{}' requires a value", option))?;
+                (option, *val, 2)
             };
             if field.is_empty() {
                 return Err(anyhow::anyhow!("Expected an option name after '--'"));
@@ -670,6 +709,13 @@ fn print_command_summary() {
     println!("  load        Load context from file");
     println!("  request     Make an HTTP request");
     println!("  tab         Switch or close tabs");
+    println!("  screenshot  Capture a screenshot to a file or variable");
+    println!("  back        Navigate back in history");
+    println!("  forward     Navigate forward in history");
+    println!("  reload      Reload the current page");
+    println!("  viewport    Set or reset the browser viewport");
+    println!("  cookies     Get, set, delete, or clear cookies");
+    println!("  headers     Set or clear extra HTTP headers");
     println!();
     println!("CLI Commands:");
     println!("  run         Run a BCL flow from a YAML file");
@@ -1075,6 +1121,70 @@ fn print_command_help(command: &str) {
             println!("    tab:");
             println!("      index: <N>             # switch to tab N");
             println!("      close: true|false      # close current tab");
+        }
+        "screenshot" => {
+            println!("screenshot - Capture a screenshot");
+            println!();
+            println!("USAGE:");
+            println!("    screenshot: <FILE_PATH>");
+            println!("    screenshot:");
+            println!("      path: <FILE_PATH>      # optional if 'to' is set");
+            println!("      format: png|jpeg       # optional (default: png)");
+            println!("      quality: <0-100>       # optional (jpeg only)");
+            println!("      full_page: true|false  # optional (default: false)");
+            println!("      to: <VAR_NAME>         # optional, store base64 data");
+        }
+        "back" | "forward" => {
+            println!("{} - Navigate in browser history", command);
+            println!();
+            println!("USAGE:");
+            println!("    {}:", command);
+        }
+        "reload" => {
+            println!("reload - Reload the current page");
+            println!();
+            println!("USAGE:");
+            println!("    reload:");
+            println!("    reload:");
+            println!("      ignore_cache: true|false  # optional (default: false)");
+        }
+        "viewport" => {
+            println!("viewport - Set or reset the browser viewport");
+            println!();
+            println!("USAGE:");
+            println!("    viewport:");
+            println!("      width: <PIXELS>");
+            println!("      height: <PIXELS>");
+            println!("      device_scale_factor: <N>  # optional (default: 1)");
+            println!("      mobile: true|false        # optional (default: false)");
+            println!();
+            println!("    viewport:");
+            println!("      reset: true              # restore the default viewport");
+        }
+        "cookies" => {
+            println!("cookies - Manage browser cookies");
+            println!();
+            println!("USAGE:");
+            println!("    cookies: get|set|delete|clear");
+            println!("    cookies:");
+            println!("      action: get|set|delete|clear");
+            println!("      name: <NAME>              # for set/delete");
+            println!("      value: <VALUE>            # for set");
+            println!("      url: <URL>                # optional");
+            println!("      domain: <DOMAIN>          # optional");
+            println!("      path: <PATH>              # optional");
+            println!("      to: <VAR_NAME>            # optional, for get");
+        }
+        "headers" => {
+            println!("headers - Set or clear extra HTTP headers");
+            println!();
+            println!("USAGE:");
+            println!("    headers:");
+            println!("      Header-Name: <VALUE>");
+            println!("    headers: clear");
+            println!();
+            println!("In bcl exec, pass a JSON object as the value:");
+            println!("    bcl exec headers '{{\"X-Key\": \"value\"}}'");
         }
         "cli" => {
             println!("CLI Commands:");
@@ -1670,6 +1780,82 @@ fn print_command_examples(command: &str) {
             println!("    tab:");
             println!("      close: true");
         }
+        "screenshot" => {
+            println!("screenshot - Examples");
+            println!();
+            println!("Save a viewport screenshot:");
+            println!("    screenshot: /tmp/page.png");
+            println!();
+            println!("Full-page screenshot stored in a variable:");
+            println!("    screenshot:");
+            println!("      full_page: true");
+            println!("      to: SHOT_B64");
+            println!();
+            println!("CLI:");
+            println!("    bcl exec screenshot /tmp/page.png");
+            println!("    bcl exec screenshot --full_page true --to SHOT_B64");
+        }
+        "back" | "forward" => {
+            println!("{} - Examples", command);
+            println!();
+            println!("    {}:", command);
+            println!();
+            println!("CLI:");
+            println!("    bcl exec {}", command);
+        }
+        "reload" => {
+            println!("reload - Examples");
+            println!();
+            println!("    reload:");
+            println!();
+            println!("Bypass the cache:");
+            println!("    reload:");
+            println!("      ignore_cache: true");
+            println!();
+            println!("CLI:");
+            println!("    bcl exec reload --ignore_cache true");
+        }
+        "viewport" => {
+            println!("viewport - Examples");
+            println!();
+            println!("Set viewport size:");
+            println!("    viewport:");
+            println!("      width: 1280");
+            println!("      height: 720");
+            println!();
+            println!("CLI:");
+            println!("    bcl exec viewport 1280 --height 720");
+        }
+        "cookies" => {
+            println!("cookies - Examples");
+            println!();
+            println!("Read cookies into a variable:");
+            println!("    cookies: get");
+            println!("      to: COOKIES");
+            println!();
+            println!("Set a cookie:");
+            println!("    cookies:");
+            println!("      action: set");
+            println!("      name: session");
+            println!("      value: abc123");
+            println!("      url: https://example.com");
+            println!();
+            println!("CLI:");
+            println!("    bcl exec cookies set --name session --value abc123 --url https://example.com");
+        }
+        "headers" => {
+            println!("headers - Examples");
+            println!();
+            println!("Add a header:");
+            println!("    headers:");
+            println!("      X-API-Key: secret");
+            println!();
+            println!("Clear all extra headers:");
+            println!("    headers: clear");
+            println!();
+            println!("CLI:");
+            println!("    bcl exec headers '{{\"X-API-Key\":\"secret\"}}'");
+        }
         "cli" => {
             println!("CLI Commands - Examples");
             println!();
@@ -1849,6 +2035,35 @@ mod tests {
                     &flow_file.get("main").unwrap()[0],
                     bcl::flow::Action::Goto { url, .. } if url == "https://example.com"
                 ));
+            }
+            _ => panic!("Expected exec command"),
+        }
+    }
+
+    #[test]
+    fn exec_accepts_options_without_primary_value() {
+        let cli = Cli::try_parse_from([
+            "bcl",
+            "exec",
+            "screenshot",
+            "--full_page",
+            "true",
+            "--to",
+            "SHOT_B64",
+        ])
+        .unwrap();
+
+        match cli {
+            Cli::Exec(args) => {
+                let flow_file = parse_exec_action(&args).unwrap();
+                match &flow_file.get("main").unwrap()[0] {
+                    bcl::flow::Action::Screenshot { path, to, full_page, .. } => {
+                        assert!(path.is_none());
+                        assert_eq!(to.as_deref(), Some("SHOT_B64"));
+                        assert!(*full_page);
+                    }
+                    _ => panic!("Expected Screenshot action"),
+                }
             }
             _ => panic!("Expected exec command"),
         }

@@ -39,7 +39,23 @@ bcl list <path_to_yaml>
 bcl exec goto https://example.com
 bcl exec read //body --html true
 bcl exec read '//*[@id="link"]' --to LINK_REF --attribute href
+
+# browser navigation and capture
+bcl exec back
+bcl exec forward
+bcl exec reload --ignore_cache true
+bcl exec viewport 1280 --height 720
+bcl exec screenshot ./page.png --full_page true
+bcl exec screenshot --to SCREENSHOT_B64
+
+# request state
+bcl exec cookies get --to COOKIES
+bcl exec cookies set --name session --value abc123 --url https://example.com
+bcl exec headers '{"X-API-Key":"secret"}'
+bcl exec headers clear
 ```
+
+Run `bcl help <action>` or `bcl help <action> --examples` for action-specific usage.
 
 ### Run Options
 
