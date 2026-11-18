@@ -64,6 +64,24 @@ impl Locator {
         Ok(())
     }
 
+    pub async fn focus(&self) -> Result<(), Error> {
+        let expr = format!(
+            "(function(){{var el={el};if(!el)return false;el.focus();return document.activeElement===el;}})()",
+            el = element_expr(&self.selector, self.index)
+        );
+        evaluate_raw(&self.client, &expr).await?;
+        Ok(())
+    }
+
+    pub async fn blur(&self) -> Result<(), Error> {
+        let expr = format!(
+            "(function(){{var el={el};if(!el)return false;el.blur();return document.activeElement!==el;}})()",
+            el = element_expr(&self.selector, self.index)
+        );
+        evaluate_raw(&self.client, &expr).await?;
+        Ok(())
+    }
+
     pub async fn inner_text(&self) -> Result<String, Error> {
         let expr = format!(
             "(function(){{var el={el};return el?(el.innerText||el.textContent||''):'';}})()",

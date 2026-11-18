@@ -244,6 +244,57 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
             }
             Ok(Some(Action::Type { value, target, secret, timeout, on_error, on_timeout, shadow_root, iframe }))
         }
+        "fill" => {
+            let mut value = parse_string_value(first_val).ok();
+            let mut target = None;
+            let mut timeout = None;
+            let mut on_error = None;
+            let mut on_timeout = None;
+            let mut shadow_root = None;
+            let mut iframe = None;
+            for (key, val) in action_options(first_val, &action_keys, &action_values) {
+                match key.as_str() {
+                    "value" => value = parse_string_value(&val).ok(),
+                    "target" => target = parse_string_value(&val).ok(),
+                    "timeout" => timeout = parse_timeout_value(&val),
+                    "on_error" => on_error = Some(parse_actions_from_value(&val)),
+                    "on_timeout" => on_timeout = Some(parse_actions_from_value(&val)),
+                    "shadow_root" => shadow_root = parse_selector_path_value(&val),
+                    "iframe" => iframe = parse_selector_path_value(&val),
+                    _ => {}
+                }
+            }
+            let value = value.ok_or_else(|| Error::InvalidAction("fill requires a value".to_string()))?;
+            Ok(Some(Action::Fill { value, target, timeout, on_error, on_timeout, shadow_root, iframe }))
+        }
+        "focus" | "blur" => {
+            let mut target = if matches!(first_val, serde_yaml::Value::String(_)) {
+                parse_string_value(first_val).ok()
+            } else {
+                None
+            };
+            let mut timeout = None;
+            let mut on_error = None;
+            let mut on_timeout = None;
+            let mut shadow_root = None;
+            let mut iframe = None;
+            for (key, val) in action_options(first_val, &action_keys, &action_values) {
+                match key.as_str() {
+                    "target" => target = parse_string_value(&val).ok(),
+                    "timeout" => timeout = parse_timeout_value(&val),
+                    "on_error" => on_error = Some(parse_actions_from_value(&val)),
+                    "on_timeout" => on_timeout = Some(parse_actions_from_value(&val)),
+                    "shadow_root" => shadow_root = parse_selector_path_value(&val),
+                    "iframe" => iframe = parse_selector_path_value(&val),
+                    _ => {}
+                }
+            }
+            if first_key == "focus" {
+                Ok(Some(Action::Focus { target, timeout, on_error, on_timeout, shadow_root, iframe }))
+            } else {
+                Ok(Some(Action::Blur { target, timeout, on_error, on_timeout, shadow_root, iframe }))
+            }
+        }
         "click" => {
             let mut target = None;
             let mut timeout = None;
@@ -1050,6 +1101,7 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
         "screenshot" => {
             let mut path = parse_string_value(first_val).ok().filter(|p| !p.is_empty());
             let mut to = None;
+            let mut target = None;
             let mut format = None;
             let mut quality = None;
             let mut full_page = false;
@@ -1057,6 +1109,7 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
                 match key.as_str() {
                     "path" => path = parse_string_value(&val).ok(),
                     "to" => to = parse_string_value(&val).ok(),
+                    "target" => target = parse_string_value(&val).ok(),
                     "format" => format = parse_string_value(&val).ok(),
                     "quality" => quality = parse_u64_value(&val).map(|n| n as u8),
                     "full_page" => full_page = parse_bool_value(&val).unwrap_or(false),
@@ -1066,7 +1119,7 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
             if path.is_none() && to.is_none() {
                 return Err(Error::InvalidAction("screenshot requires 'path' or 'to'".to_string()));
             }
-            Ok(Some(Action::Screenshot { path, to, format, quality, full_page }))
+            Ok(Some(Action::Screenshot { path, to, target, format, quality, full_page }))
         }
         "back" => Ok(Some(Action::Back)),
         "forward" => Ok(Some(Action::Forward)),
@@ -1105,6 +1158,112 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
                 mobile,
                 reset,
             }))
+        }
+        "emulate" => {
+            let first_value = parse_string_value(first_val).ok().filter(|v| !v.is_empty());
+            let mut reset = first_value.as_deref() == Some("reset");
+            let mut preset = first_value.filter(|v| v != "reset");
+            let mut offline = None;
+            let mut latency = None;
+            let mut download = None;
+            let mut upload = None;
+            let mut media = None;
+            let mut color_scheme = None;
+            let mut latitude = None;
+            let mut longitude = None;
+            let mut accuracy = None;
+            let mut user_agent = None;
+            let mut timezone = None;
+
+            for (key, val) in action_options(first_val, &action_keys, &action_values) {
+                match key.as_str() {
+                    "preset" | "network" => preset = parse_string_value(&val).ok(),
+                    "offline" => offline = parse_bool_value(&val).ok(),
+                    "latency" => latency = parse_f64_value(&val),
+                    "download" | "download_throughput" => download = parse_f64_value(&val),
+                    "upload" | "upload_throughput" => upload = parse_f64_value(&val),
+                    "media" => media = parse_string_value(&val).ok(),
+                    "color_scheme" => color_scheme = parse_string_value(&val).ok(),
+                    "latitude" => latitude = parse_f64_value(&val),
+                    "longitude" => longitude = parse_f64_value(&val),
+                    "accuracy" => accuracy = parse_f64_value(&val),
+                    "user_agent" => user_agent = parse_string_value(&val).ok(),
+                    "timezone" => timezone = parse_string_value(&val).ok(),
+                    "reset" => reset = parse_bool_value(&val).unwrap_or(false),
+                    _ => {}
+                }
+            }
+
+            if (latitude.is_some() != longitude.is_some())
+                && !reset
+            {
+                return Err(Error::InvalidAction("emulate requires both 'latitude' and 'longitude'".to_string()));
+            }
+
+            Ok(Some(Action::Emulate {
+                preset,
+                offline,
+                latency,
+                download,
+                upload,
+                media,
+                color_scheme,
+                latitude,
+                longitude,
+                accuracy,
+                user_agent,
+                timezone,
+                reset,
+            }))
+        }
+        "route" => {
+            let mut pattern = parse_string_value(first_val).ok().filter(|p| !p.is_empty());
+            let mut action = None;
+            let mut status = None;
+            let mut headers = HashMap::new();
+            let mut body = None;
+            let mut reason = None;
+
+            for (key, val) in action_options(first_val, &action_keys, &action_values) {
+                match key.as_str() {
+                    "pattern" | "url" => pattern = parse_string_value(&val).ok(),
+                    "action" => action = parse_string_value(&val).ok(),
+                    "status" | "status_code" => status = parse_u64_value(&val).map(|n| n as u16),
+                    "headers" => headers = parse_string_map(&val).unwrap_or_default(),
+                    "body" => body = parse_string_value(&val).ok(),
+                    "reason" => reason = parse_string_value(&val).ok(),
+                    _ => {}
+                }
+            }
+
+            let pattern = pattern.ok_or_else(|| Error::InvalidAction("route requires a URL pattern".to_string()))?;
+            let action = action.unwrap_or_else(|| "continue".to_string()).to_lowercase();
+            let action = match action.as_str() {
+                "continue" => "continue",
+                "fulfill" | "mock" => "fulfill",
+                "fail" | "abort" | "deny" => "fail",
+                other => return Err(Error::InvalidAction(format!("unknown route action: {}", other))),
+            }
+            .to_string();
+
+            Ok(Some(Action::Route {
+                pattern,
+                action: Some(action),
+                status,
+                headers,
+                body,
+                reason,
+            }))
+        }
+        "unroute" => {
+            let mut pattern = parse_string_value(first_val).ok().filter(|p| !p.is_empty());
+            for (key, val) in action_options(first_val, &action_keys, &action_values) {
+                if key == "pattern" || key == "url" {
+                    pattern = parse_string_value(&val).ok();
+                }
+            }
+            let pattern = pattern.ok_or_else(|| Error::InvalidAction("unroute requires a URL pattern".to_string()))?;
+            Ok(Some(Action::Unroute { pattern }))
         }
         "cookies" => {
             let mut action = parse_string_value(first_val).ok().filter(|a| !a.is_empty());
@@ -1191,6 +1350,38 @@ fn parse_action_from_map(map: &serde_yaml::Mapping) -> Result<Option<Action>, Er
                 action = "set".to_string();
             }
             Ok(Some(Action::Headers { action: Some(action), values }))
+        }
+        "storage" => {
+            let mut action = parse_string_value(first_val).ok().filter(|a| !a.is_empty());
+            let mut area = None;
+            let mut key = None;
+            let mut value = None;
+            let mut to = None;
+            for (key_name, val) in action_options(first_val, &action_keys, &action_values) {
+                match key_name.as_str() {
+                    "action" => action = parse_string_value(&val).ok(),
+                    "area" => area = parse_string_value(&val).ok(),
+                    "key" => key = parse_string_value(&val).ok(),
+                    "value" => value = parse_string_value(&val).ok(),
+                    "to" => to = parse_string_value(&val).ok(),
+                    _ => {}
+                }
+            }
+            let action = action.unwrap_or_else(|| "get".to_string()).to_lowercase();
+            let action = match action.as_str() {
+                "get" | "list" => "get",
+                "set" | "add" => "set",
+                "delete" | "remove" => "delete",
+                "clear" | "clear_all" => "clear",
+                other => return Err(Error::InvalidAction(format!("unknown storage action: {}", other))),
+            };
+            Ok(Some(Action::Storage {
+                action: action.to_string(),
+                area,
+                key,
+                value,
+                to,
+            }))
         }
         _ => Err(Error::InvalidAction(format!("Unknown action: {}", first_key))),
     }
@@ -2597,5 +2788,141 @@ test:
             }
             _ => panic!("Expected Headers action"),
         }
+    }
+
+    #[test]
+    fn test_parse_fill_focus_and_blur() {
+        let yaml = r##"
+test:
+  - fill: hello
+    target: "#name"
+  - focus: "#name"
+  - blur:
+      target: "#name"
+"##;
+        let flow_file = parse_str(yaml).unwrap();
+        let actions = flow_file.get("test").unwrap();
+        assert_eq!(actions.len(), 3);
+        match &actions[0] {
+            Action::Fill { value, target, .. } => {
+                assert_eq!(value, "hello");
+                assert_eq!(target.as_deref(), Some("#name"));
+            }
+            _ => panic!("Expected Fill action"),
+        }
+        assert!(matches!(&actions[1], Action::Focus { target, .. } if target.as_deref() == Some("#name")));
+        assert!(matches!(&actions[2], Action::Blur { target, .. } if target.as_deref() == Some("#name")));
+    }
+
+    #[test]
+    fn test_parse_screenshot_with_target() {
+        let yaml = r##"
+test:
+  - screenshot: ./card.png
+    target: "#card"
+"##;
+        let flow_file = parse_str(yaml).unwrap();
+        let actions = flow_file.get("test").unwrap();
+        match &actions[0] {
+            Action::Screenshot { path, target, .. } => {
+                assert_eq!(path.as_deref(), Some("./card.png"));
+                assert_eq!(target.as_deref(), Some("#card"));
+            }
+            _ => panic!("Expected Screenshot action"),
+        }
+    }
+
+    #[test]
+    fn test_parse_storage_actions() {
+        let yaml = r##"
+test:
+  - storage: set
+    area: session
+    key: token
+    value: abc123
+  - storage: get
+    key: token
+    to: TOKEN
+  - storage: clear
+"##;
+        let flow_file = parse_str(yaml).unwrap();
+        let actions = flow_file.get("test").unwrap();
+        assert_eq!(actions.len(), 3);
+        match &actions[0] {
+            Action::Storage { action, area, key, value, .. } => {
+                assert_eq!(action, "set");
+                assert_eq!(area.as_deref(), Some("session"));
+                assert_eq!(key.as_deref(), Some("token"));
+                assert_eq!(value.as_deref(), Some("abc123"));
+            }
+            _ => panic!("Expected Storage action"),
+        }
+        match &actions[1] {
+            Action::Storage { action, key, to, .. } => {
+                assert_eq!(action, "get");
+                assert_eq!(key.as_deref(), Some("token"));
+                assert_eq!(to.as_deref(), Some("TOKEN"));
+            }
+            _ => panic!("Expected Storage action"),
+        }
+        assert!(matches!(&actions[2], Action::Storage { action, .. } if action == "clear"));
+    }
+
+    #[test]
+    fn test_parse_emulate_actions() {
+        let yaml = r##"
+test:
+  - emulate: slow_3g
+    color_scheme: dark
+    latitude: 37.7749
+    longitude: -122.4194
+    timezone: UTC
+  - emulate: reset
+"##;
+        let flow_file = parse_str(yaml).unwrap();
+        let actions = flow_file.get("test").unwrap();
+        assert_eq!(actions.len(), 2);
+        match &actions[0] {
+            Action::Emulate { preset, color_scheme, latitude, longitude, timezone, .. } => {
+                assert_eq!(preset.as_deref(), Some("slow_3g"));
+                assert_eq!(color_scheme.as_deref(), Some("dark"));
+                assert_eq!(*latitude, Some(37.7749));
+                assert_eq!(*longitude, Some(-122.4194));
+                assert_eq!(timezone.as_deref(), Some("UTC"));
+            }
+            _ => panic!("Expected Emulate action"),
+        }
+        assert!(matches!(&actions[1], Action::Emulate { reset: true, .. }));
+    }
+
+    #[test]
+    fn test_parse_route_and_unroute() {
+        let yaml = r##"
+test:
+  - route: "**/api/**"
+    action: fulfill
+    status: 200
+    headers:
+      Content-Type: application/json
+    body: '{"ok":true}'
+  - route: "**/tracker/**"
+    action: abort
+  - unroute: "**/api/**"
+"##;
+        let flow_file = parse_str(yaml).unwrap();
+        let actions = flow_file.get("test").unwrap();
+        assert_eq!(actions.len(), 3);
+        match &actions[0] {
+            Action::Route { pattern, action, status, headers, body, .. } => {
+                assert_eq!(pattern, "**/api/**");
+                assert_eq!(action.as_deref(), Some("fulfill"));
+                assert_eq!(*status, Some(200));
+                assert_eq!(headers.get("Content-Type").map(String::as_str), Some("application/json"));
+                assert_eq!(body.as_deref(), Some(r#"{"ok":true}"#));
+            }
+            _ => panic!("Expected Route action"),
+        }
+        assert!(matches!(&actions[1], Action::Route { action, .. } if action.as_deref() == Some("fail")));
+        assert!(matches!(&actions[2], Action::Unroute { pattern } if pattern == "**/api/**"));
     }
 }

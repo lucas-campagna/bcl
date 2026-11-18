@@ -3,11 +3,13 @@ use crate::cdp::dialog::Dialog;
 use crate::cdp::download::Download;
 use crate::cdp::locator::Locator;
 use crate::cdp::options::{
-    CheckOptions, ClickOptions, CookieOptions, DblClickOptions, FilterOptions, GotoOptions,
-    HoverOptions, InputFiles, KeyboardPressOptions, PageCloseOptions, ScreenshotOptions,
-    SelectOptionOptions, SelectOptionValue, SetInputFilesOptions, ViewportOptions, WaitOptions,
+    CheckOptions, ClickOptions, CookieOptions, DblClickOptions, EmulateGeolocation,
+    EmulateOptions, FilterOptions, GotoOptions, HoverOptions, InputFiles, KeyboardPressOptions,
+    PageCloseOptions, ScreenshotOptions, SelectOptionOptions, SelectOptionValue,
+    SetInputFilesOptions, ViewportOptions, WaitOptions,
 };
 use crate::cdp::protocol::{SerializedArgument, SerializedValue, SpecialValue};
+use crate::cdp::route::{resolve_paused_request, RouteHandler, RouteRegistry};
 use crate::error::Error;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -18,6 +20,17 @@ const DEFAULT_NAV_TIMEOUT: u64 = 30_000;
 
 pub(crate) fn js_str(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
+}
+
+fn storage_object(area: &str) -> Result<&'static str, Error> {
+    match area {
+        "local" | "localStorage" => Ok("window.localStorage"),
+        "session" | "sessionStorage" => Ok("window.sessionStorage"),
+        other => Err(Error::InvalidInput(format!(
+            "unknown storage area: {} (expected 'local' or 'session')",
+            other
+        ))),
+    }
 }
 
 pub(crate) fn element_expr(selector: &str, index: Option<usize>) -> String {
@@ -88,6 +101,28 @@ pub(crate) async fn element_center(
         .and_then(|v| v.as_f64())
         .ok_or_else(|| Error::ActionFailed(format!("Element not found: {}", selector)))?;
     Ok((x, y))
+}
+
+pub(crate) async fn element_box(
+    client: &CdpClient,
+    selector: &str,
+) -> Result<(f64, f64, f64, f64), Error> {
+    let expr = format!(
+        "(function(){{var el={el};if(!el)return null;var r=el.getBoundingClientRect();return {{x:r.left+window.scrollX,y:r.top+window.scrollY,width:r.width,height:r.height}};}})()",
+        el = element_expr(selector, None)
+    );
+    let result = evaluate_raw(client, &expr).await?;
+    let value = result.get("value").cloned().unwrap_or(Value::Null);
+    let x = value.get("x").and_then(|v| v.as_f64());
+    let y = value.get("y").and_then(|v| v.as_f64());
+    let width = value.get("width").and_then(|v| v.as_f64());
+    let height = value.get("height").and_then(|v| v.as_f64());
+    match (x, y, width, height) {
+        (Some(x), Some(y), Some(width), Some(height)) if width > 0.0 && height > 0.0 => {
+            Ok((x, y, width, height))
+        }
+        _ => Err(Error::ActionFailed(format!("Element not found or has no box: {}", selector))),
+    }
 }
 
 pub(crate) async fn dispatch_mouse(
@@ -168,11 +203,68 @@ fn key_info(key: &str) -> (String, i64, Option<String>) {
     }
 }
 
+fn mbps_to_bytes_per_second(mbps: f64) -> f64 {
+    if mbps < 0.0 {
+        -1.0
+    } else {
+        mbps * 1_000_000.0 / 8.0
+    }
+}
+
+fn network_preset(preset: &str) -> Result<(bool, f64, f64, f64), Error> {
+    match preset.trim().to_lowercase().replace('-', "_").as_str() {
+        "offline" => Ok((true, 0.0, 0.0, 0.0)),
+        "slow_3g" | "slow3g" => Ok((false, 400.0, 0.4, 0.4)),
+        "fast_3g" | "fast3g" => Ok((false, 150.0, 1.6, 0.75)),
+        "none" | "reset" => Ok((false, 0.0, -1.0, -1.0)),
+        other => Err(Error::InvalidInput(format!(
+            "unknown network preset: {} (expected offline, slow_3g, fast_3g, or none)",
+            other
+        ))),
+    }
+}
+
+fn normalize_media(value: &str) -> Result<String, Error> {
+    match value.trim().to_lowercase().as_str() {
+        "screen" | "print" => Ok(value.trim().to_lowercase()),
+        "none" | "reset" | "" => Ok(String::new()),
+        other => Err(Error::InvalidInput(format!(
+            "unknown media type: {} (expected screen, print, or none)",
+            other
+        ))),
+    }
+}
+
+fn normalize_color_scheme(value: &str) -> Result<String, Error> {
+    match value.trim().to_lowercase().as_str() {
+        "light" | "dark" => Ok(value.trim().to_lowercase()),
+        "none" | "reset" | "" => Ok(String::new()),
+        other => Err(Error::InvalidInput(format!(
+            "unknown color scheme: {} (expected light, dark, or none)",
+            other
+        ))),
+    }
+}
+
+fn validate_geolocation(geo: &EmulateGeolocation) -> Result<(), Error> {
+    if !(-90.0..=90.0).contains(&geo.latitude) {
+        return Err(Error::InvalidInput("latitude must be between -90 and 90".to_string()));
+    }
+    if !(-180.0..=180.0).contains(&geo.longitude) {
+        return Err(Error::InvalidInput("longitude must be between -180 and 180".to_string()));
+    }
+    if geo.accuracy < 0.0 {
+        return Err(Error::InvalidInput("accuracy must not be negative".to_string()));
+    }
+    Ok(())
+}
+
 pub struct Page {
     client: Arc<CdpClient>,
     target_id: String,
     default_navigation_timeout: Mutex<u64>,
     url: Arc<Mutex<String>>,
+    routes: Arc<RouteRegistry>,
 }
 
 impl Page {
@@ -198,6 +290,7 @@ impl Page {
             target_id,
             default_navigation_timeout: Mutex::new(DEFAULT_NAV_TIMEOUT),
             url: Arc::new(Mutex::new(url)),
+            routes: Arc::new(RouteRegistry::default()),
         });
 
         let _ = client.send("Page.enable", None).await;
@@ -207,6 +300,7 @@ impl Page {
 
         page.setup_downloads().await;
         page.spawn_url_listener();
+        page.spawn_fetch_listener();
         Ok(page)
     }
 
@@ -252,6 +346,69 @@ impl Page {
                 }
             }
         });
+    }
+
+    fn spawn_fetch_listener(self: &Arc<Self>) {
+        let mut rx = self.client.subscribe();
+        let routes = self.routes.clone();
+        let client = self.client.clone();
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(event) if event.method == "Fetch.requestPaused" => {
+                        let request_id = match event
+                            .params
+                            .get("requestId")
+                            .and_then(|value| value.as_str())
+                        {
+                            Some(id) => id.to_string(),
+                            None => continue,
+                        };
+                        let url = event
+                            .params
+                            .pointer("/request/url")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        let handler = routes.match_handler(&url).await;
+                        let client = client.clone();
+                        tokio::spawn(async move {
+                            resolve_paused_request(client, request_id, handler).await;
+                        });
+                    }
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => {
+                        eprintln!("[CDP] Fetch listener lagged by {} events", count);
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+    }
+
+    pub async fn route(&self, pattern: &str, handler: RouteHandler) -> Result<(), Error> {
+        let first = self.routes.add(pattern.to_string(), handler).await?;
+        if first {
+            if let Err(error) = self
+                .client
+                .send("Fetch.enable", Some(json!({ "patterns": [] })))
+                .await
+            {
+                let _ = self.routes.remove(pattern).await;
+                return Err(error);
+            }
+            self.routes.enable();
+        }
+        Ok(())
+    }
+
+    pub async fn unroute(&self, pattern: &str) -> Result<(), Error> {
+        self.routes.remove(pattern).await;
+        if self.routes.is_empty().await && self.routes.is_enabled() {
+            self.client.send("Fetch.disable", None).await?;
+            self.routes.disable();
+        }
+        Ok(())
     }
 
     pub fn target_id(&self) -> &str {
@@ -400,10 +557,19 @@ impl Page {
         let format = opts.format.unwrap_or_else(|| "png".to_string());
         let mut params = json!({
             "format": format,
-            "captureBeyondViewport": opts.full_page,
+            "captureBeyondViewport": opts.full_page || opts.target.is_some(),
         });
 
-        if opts.full_page {
+        if let Some(target) = &opts.target {
+            let (x, y, width, height) = element_box(&self.client, target).await?;
+            params["clip"] = json!({
+                "x": x,
+                "y": y,
+                "width": width,
+                "height": height,
+                "scale": 1,
+            });
+        } else if opts.full_page {
             let metrics = self.client.send("Page.getLayoutMetrics", None).await?;
             let width = metrics
                 .pointer("/cssContentSize/width")
@@ -462,6 +628,126 @@ impl Page {
         self.client
             .send("Emulation.clearDeviceMetricsOverride", None)
             .await?;
+        Ok(())
+    }
+
+    pub async fn emulate(&self, opts: EmulateOptions) -> Result<(), Error> {
+        if opts.reset {
+            self.client
+                .send(
+                    "Network.emulateNetworkConditions",
+                    Some(json!({
+                        "offline": false,
+                        "latency": 0.0,
+                        "downloadThroughput": -1.0,
+                        "uploadThroughput": -1.0,
+                    })),
+                )
+                .await?;
+            self.client
+                .send(
+                    "Emulation.setEmulatedMedia",
+                    Some(json!({ "media": "", "features": [] })),
+                )
+                .await?;
+            self.client
+                .send("Emulation.clearGeolocationOverride", None)
+                .await?;
+            self.client
+                .send("Network.setUserAgentOverride", Some(json!({ "userAgent": "" })))
+                .await?;
+            self.client
+                .send("Emulation.setTimezoneOverride", Some(json!({ "timezoneId": "" })))
+                .await?;
+        }
+
+        let preset = opts.preset.as_deref().unwrap_or("");
+        let wants_network = !preset.is_empty()
+            || opts.offline.is_some()
+            || opts.latency.is_some()
+            || opts.download.is_some()
+            || opts.upload.is_some();
+        if wants_network {
+            let (preset_offline, preset_latency, preset_download, preset_upload) = if preset.is_empty()
+            {
+                (false, 0.0, -1.0, -1.0)
+            } else {
+                network_preset(preset)?
+            };
+            let offline = opts.offline.unwrap_or(preset_offline);
+            let latency = opts.latency.unwrap_or(preset_latency);
+            let download = opts.download.unwrap_or(preset_download);
+            let upload = opts.upload.unwrap_or(preset_upload);
+            self.client
+                .send(
+                    "Network.emulateNetworkConditions",
+                    Some(json!({
+                        "offline": offline,
+                        "latency": latency,
+                        "downloadThroughput": mbps_to_bytes_per_second(download),
+                        "uploadThroughput": mbps_to_bytes_per_second(upload),
+                    })),
+                )
+                .await?;
+        }
+
+        let media = opts.media.as_deref().map(normalize_media).transpose()?;
+        let color_scheme = opts
+            .color_scheme
+            .as_deref()
+            .map(normalize_color_scheme)
+            .transpose()?;
+        if media.is_some() || color_scheme.is_some() {
+            let features = match color_scheme.as_deref() {
+                Some(value) if !value.is_empty() => vec![json!({
+                    "name": "prefers-color-scheme",
+                    "value": value,
+                })],
+                _ => vec![],
+            };
+            self.client
+                .send(
+                    "Emulation.setEmulatedMedia",
+                    Some(json!({
+                        "media": media.unwrap_or_default(),
+                        "features": features,
+                    })),
+                )
+                .await?;
+        }
+
+        if let Some(geo) = opts.geolocation {
+            validate_geolocation(&geo)?;
+            self.client
+                .send(
+                    "Emulation.setGeolocationOverride",
+                    Some(json!({
+                        "latitude": geo.latitude,
+                        "longitude": geo.longitude,
+                        "accuracy": geo.accuracy,
+                    })),
+                )
+                .await?;
+        }
+
+        if let Some(user_agent) = opts.user_agent {
+            self.client
+                .send(
+                    "Network.setUserAgentOverride",
+                    Some(json!({ "userAgent": user_agent })),
+                )
+                .await?;
+        }
+
+        if let Some(timezone) = opts.timezone {
+            self.client
+                .send(
+                    "Emulation.setTimezoneOverride",
+                    Some(json!({ "timezoneId": timezone })),
+                )
+                .await?;
+        }
+
         Ok(())
     }
 
@@ -534,6 +820,49 @@ impl Page {
                 Some(json!({ "headers": {} })),
             )
             .await?;
+        Ok(())
+    }
+
+    pub async fn storage_get(&self, area: &str, key: Option<&str>) -> Result<Value, Error> {
+        let store = storage_object(area)?;
+        let expr = match key {
+            Some(key) => format!("{}.getItem({})", store, js_str(key)),
+            None => format!(
+                "(function(){{var s={};var o={{}};for(var i=0;i<s.length;i++){{var k=s.key(i);o[k]=s.getItem(k);}}return o;}})()",
+                store
+            ),
+        };
+        evaluate_value(&self.client, &expr).await
+    }
+
+    pub async fn storage_set(&self, area: &str, key: &str, value: &str) -> Result<(), Error> {
+        let store = storage_object(area)?;
+        let expr = format!(
+            "(function(){{{}.setItem({},{});
+            return true;}})()",
+            store,
+            js_str(key),
+            js_str(value)
+        );
+        evaluate_value(&self.client, &expr).await?;
+        Ok(())
+    }
+
+    pub async fn storage_delete(&self, area: &str, key: &str) -> Result<(), Error> {
+        let store = storage_object(area)?;
+        let expr = format!(
+            "(function(){{{}.removeItem({});return true;}})()",
+            store,
+            js_str(key)
+        );
+        evaluate_value(&self.client, &expr).await?;
+        Ok(())
+    }
+
+    pub async fn storage_clear(&self, area: &str) -> Result<(), Error> {
+        let store = storage_object(area)?;
+        let expr = format!("(function(){{{}.clear();return true;}})()", store);
+        evaluate_value(&self.client, &expr).await?;
         Ok(())
     }
 
@@ -968,11 +1297,30 @@ mod tests {
                     "Network.getCookies" => {
                         json!({ "cookies": [{ "name": "session", "value": "abc" }] })
                     }
+                    "Runtime.evaluate" => json!({
+                        "result": {
+                            "value": { "x": 10.0, "y": 20.0, "width": 100.0, "height": 50.0 }
+                        }
+                    }),
                     _ => json!({}),
                 };
                 let _ = ws
                     .send(Message::Text(json!({ "id": id, "result": result }).to_string()))
                     .await;
+                if method == "Fetch.enable" {
+                    let _ = ws
+                        .send(Message::Text(
+                            json!({
+                                "method": "Fetch.requestPaused",
+                                "params": {
+                                    "requestId": "req-1",
+                                    "request": { "url": "https://example.com/api/users" }
+                                }
+                            })
+                            .to_string(),
+                        ))
+                        .await;
+                }
             }
         });
 
@@ -1010,6 +1358,7 @@ mod tests {
                 format: Some("png".to_string()),
                 quality: None,
                 full_page: true,
+                target: None,
             })
             .await
             .unwrap();
@@ -1139,5 +1488,192 @@ mod tests {
             .collect();
         assert_eq!(clears.len(), 2);
         assert_eq!(clears[1].pointer("/params/headers").and_then(|v| v.as_object()).map(|o| o.len()), Some(0));
+    }
+
+    #[tokio::test]
+    async fn screenshot_target_uses_element_box_as_clip() {
+        let (page, mut rx) = mock_page().await;
+        let _ = take_requests(&mut rx).await;
+
+        let (bytes, _) = page
+            .screenshot(ScreenshotOptions {
+                format: None,
+                quality: None,
+                full_page: false,
+                target: Some("#card".to_string()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(bytes, b"hello");
+
+        let requests = take_requests(&mut rx).await;
+        let capture = find_request(&requests, "Page.captureScreenshot");
+        assert_eq!(capture.pointer("/params/clip/x").and_then(|v| v.as_f64()), Some(10.0));
+        assert_eq!(capture.pointer("/params/clip/y").and_then(|v| v.as_f64()), Some(20.0));
+        assert_eq!(capture.pointer("/params/clip/width").and_then(|v| v.as_f64()), Some(100.0));
+        assert_eq!(capture.pointer("/params/clip/height").and_then(|v| v.as_f64()), Some(50.0));
+        assert_eq!(
+            capture.pointer("/params/captureBeyondViewport").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+    }
+
+    #[tokio::test]
+    async fn storage_uses_runtime_evaluate_for_both_areas() {
+        let (page, mut rx) = mock_page().await;
+        let _ = take_requests(&mut rx).await;
+
+        page.storage_set("local", "token", "abc").await.unwrap();
+        let _ = page.storage_get("session", Some("token")).await.unwrap();
+        page.storage_delete("local", "token").await.unwrap();
+        page.storage_clear("session").await.unwrap();
+
+        let requests = take_requests(&mut rx).await;
+        let expressions: Vec<&str> = requests
+            .iter()
+            .filter(|r| r.get("method").and_then(|m| m.as_str()) == Some("Runtime.evaluate"))
+            .filter_map(|r| r.pointer("/params/expression").and_then(|v| v.as_str()))
+            .collect();
+        assert_eq!(expressions.len(), 4);
+        assert!(expressions[0].contains("window.localStorage.setItem(\"token\",\"abc\")"));
+        assert!(expressions[1].contains("window.sessionStorage.getItem(\"token\")"));
+        assert!(expressions[2].contains("window.localStorage.removeItem(\"token\")"));
+        assert!(expressions[3].contains("window.sessionStorage.clear()"));
+    }
+
+    #[tokio::test]
+    async fn emulate_sends_cdp_overrides() {
+        let (page, mut rx) = mock_page().await;
+        let _ = take_requests(&mut rx).await;
+
+        page.emulate(EmulateOptions {
+            preset: Some("slow_3g".to_string()),
+            color_scheme: Some("dark".to_string()),
+            geolocation: Some(EmulateGeolocation {
+                latitude: 37.7749,
+                longitude: -122.4194,
+                accuracy: 1.0,
+            }),
+            user_agent: Some("test-agent".to_string()),
+            timezone: Some("UTC".to_string()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+        let requests = take_requests(&mut rx).await;
+        let network = find_request(&requests, "Network.emulateNetworkConditions");
+        assert_eq!(network.pointer("/params/offline").and_then(|v| v.as_bool()), Some(false));
+        assert_eq!(network.pointer("/params/latency").and_then(|v| v.as_f64()), Some(400.0));
+        assert_eq!(
+            network.pointer("/params/downloadThroughput").and_then(|v| v.as_f64()),
+            Some(50_000.0)
+        );
+        assert_eq!(
+            network.pointer("/params/uploadThroughput").and_then(|v| v.as_f64()),
+            Some(50_000.0)
+        );
+
+        let media = find_request(&requests, "Emulation.setEmulatedMedia");
+        assert_eq!(media.pointer("/params/features/0/name").and_then(|v| v.as_str()), Some("prefers-color-scheme"));
+        assert_eq!(media.pointer("/params/features/0/value").and_then(|v| v.as_str()), Some("dark"));
+
+        let geo = find_request(&requests, "Emulation.setGeolocationOverride");
+        assert_eq!(geo.pointer("/params/latitude").and_then(|v| v.as_f64()), Some(37.7749));
+        assert_eq!(geo.pointer("/params/longitude").and_then(|v| v.as_f64()), Some(-122.4194));
+
+        assert_eq!(
+            find_request(&requests, "Network.setUserAgentOverride").pointer("/params/userAgent").and_then(|v| v.as_str()),
+            Some("test-agent")
+        );
+        assert_eq!(
+            find_request(&requests, "Emulation.setTimezoneOverride").pointer("/params/timezoneId").and_then(|v| v.as_str()),
+            Some("UTC")
+        );
+    }
+
+    #[tokio::test]
+    async fn emulate_reset_sends_clear_commands() {
+        let (page, mut rx) = mock_page().await;
+        let _ = take_requests(&mut rx).await;
+
+        page.emulate(EmulateOptions {
+            reset: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+        let requests = take_requests(&mut rx).await;
+        for method in [
+            "Network.emulateNetworkConditions",
+            "Emulation.setEmulatedMedia",
+            "Emulation.clearGeolocationOverride",
+            "Network.setUserAgentOverride",
+            "Emulation.setTimezoneOverride",
+        ] {
+            assert!(requests.iter().any(|r| r.get("method").and_then(|m| m.as_str()) == Some(method)), "missing {}", method);
+        }
+    }
+
+    #[tokio::test]
+    async fn route_fulfills_matching_request() {
+        let (page, mut rx) = mock_page().await;
+        let _ = take_requests(&mut rx).await;
+
+        page.route(
+            "**/api/**",
+            RouteHandler::Fulfill {
+                status: 201,
+                headers: vec![("Content-Type".to_string(), "application/json".to_string())],
+                body: r#"{"ok":true}"#.to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let requests = take_requests(&mut rx).await;
+        let fulfill = find_request(&requests, "Fetch.fulfillRequest");
+        assert_eq!(fulfill.pointer("/params/requestId").and_then(|v| v.as_str()), Some("req-1"));
+        assert_eq!(fulfill.pointer("/params/responseCode").and_then(|v| v.as_u64()), Some(201));
+        assert_eq!(
+            fulfill.pointer("/params/responseHeaders/0/name").and_then(|v| v.as_str()),
+            Some("Content-Type")
+        );
+        assert_eq!(
+            fulfill.pointer("/params/body").and_then(|v| v.as_str()),
+            Some("eyJvayI6dHJ1ZX0=")
+        );
+    }
+
+    #[tokio::test]
+    async fn routes_enable_and_disable_fetch_once() {
+        let (page, mut rx) = mock_page().await;
+        let _ = take_requests(&mut rx).await;
+
+        page.route("**/api/**", RouteHandler::Continue).await.unwrap();
+        page.route(
+            "**/mock/**",
+            RouteHandler::Fulfill {
+                status: 200,
+                headers: vec![],
+                body: "ok".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        page.unroute("**/api/**").await.unwrap();
+        page.unroute("**/mock/**").await.unwrap();
+
+        let requests = take_requests(&mut rx).await;
+        assert_eq!(
+            requests.iter().filter(|r| r.get("method").and_then(|m| m.as_str()) == Some("Fetch.enable")).count(),
+            1
+        );
+        assert_eq!(
+            requests.iter().filter(|r| r.get("method").and_then(|m| m.as_str()) == Some("Fetch.disable")).count(),
+            1
+        );
     }
 }

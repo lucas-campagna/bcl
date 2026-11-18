@@ -6,6 +6,7 @@ pub mod locator;
 pub mod options;
 pub mod page;
 pub mod protocol;
+pub mod route;
 
 pub use browser::{connect, Browser, Context};
 pub use client::CdpClient;
@@ -13,3 +14,4 @@ pub use dialog::Dialog;
 pub use download::Download;
 pub use locator::Locator;
 pub use page::{Keyboard, Mouse, Page};
+pub use route::RouteHandler;

@@ -15,6 +15,9 @@
 | `dblclick` | Double-click an element |
 | `right_click` | Right-click an element |
 | `clear` | Clear an input field |
+| `fill` | Set an input value directly |
+| `focus` | Focus an element |
+| `blur` | Blur an element |
 | `upload` | Upload files to a file input |
 | `drag` | Drag an element to a target |
 | `scroll` | Scroll an element into view |
@@ -23,7 +26,7 @@
 | `log` | Log a message |
 | `call` | Call another flow |
 | `js` | Execute JavaScript |
-| `define` | Define a variable |
+| `define` / `set` | Define a variable |
 | `for` | Iterate over a list or repeat N times |
 | `while` | Loop while a condition is true |
 | `retry` | Retry a block on failure |
@@ -39,9 +42,15 @@
 | `forward` | Navigate forward in browser history |
 | `reload` | Reload the current page |
 | `viewport` | Set or reset the browser viewport |
+| `emulate` | Emulate network, media, geolocation, and other conditions |
+| `route` | Intercept and mock matching browser requests |
+| `unroute` | Remove a previously registered request route |
 | `cookies` | Get, set, delete, or clear cookies |
 | `headers` | Set or clear extra HTTP headers |
+| `storage` | Get, set, delete, or clear web storage |
 | `request` | Make HTTP requests |
+| `tab` | Switch or close browser tabs |
+| `server` | Start a local mock HTTP/WebSocket server |
 
 ## Action Details
 
@@ -164,6 +173,26 @@ Clear an input field:
 - clear: //*[@id="search"]
 ```
 
+### fill
+
+Set an input value directly, dispatching `input` and `change` events. Unlike `type`, this replaces the field contents in one step:
+
+```yaml
+- fill: user@example.com
+  target: //*[@id="email"]
+```
+
+Supports the same `target`, `timeout`, `shadow_root`, and `iframe` options as `type`.
+
+### focus / blur
+
+Move keyboard focus to or from an element:
+
+```yaml
+- focus: //*[@id="search"]
+- blur: //*[@id="search"]
+```
+
 ### upload
 
 Upload files to a file input element:
@@ -255,14 +284,17 @@ Execute JavaScript. The value of the final expression is the result; a top-level
   to: RESULT
 ```
 
-### define
+### define / set
 
-Define a variable:
+Define a variable (`set` is an alias for `define`):
 
 ```yaml
 - define: MY_VAR
   value: hello
   overwrite: false
+
+- set: OTHER_VAR
+  value: world
 ```
 
 ### dialog
@@ -308,11 +340,17 @@ Capture a screenshot. Use `path` to write a file, `to` to store the base64 paylo
 - screenshot: ./page.jpg
   format: jpeg
   quality: 80
+
+# capture a single element
+- screenshot:
+    target: //*[@id="card"]
+    path: ./card.png
 ```
 
 **Fields:**
 - `path` (or the action value) — output file path; optional when `to` is set
 - `to` — variable name for the base64 screenshot data
+- `target` — selector for a single element; captures just its bounding box
 - `format` — `png` (default) or `jpeg`
 - `quality` — JPEG quality from 0–100
 - `full_page` — capture the full scrollable page instead of just the viewport
@@ -322,6 +360,7 @@ CLI examples:
 ```bash
 bcl exec screenshot ./page.png
 bcl exec screenshot --full_page true --to SCREENSHOT_B64
+bcl exec screenshot ./card.png --target "//*[@id='card']"
 ```
 
 ### back / forward
@@ -381,6 +420,95 @@ CLI example:
 
 ```bash
 bcl exec viewport 1280 --height 720 --device_scale_factor 2
+```
+
+### emulate
+
+Override browser conditions such as network speed, media type, geolocation, user agent, and timezone:
+
+```yaml
+# built-in network presets
+- emulate: slow_3g
+
+# dark mode and a fixed location
+- emulate:
+    color_scheme: dark
+    latitude: 37.7749
+    longitude: -122.4194
+
+# custom network settings (download/upload are megabits per second)
+- emulate:
+    latency: 100
+    download: 5
+    upload: 1
+    offline: false
+
+# clear all overrides
+- emulate: reset
+```
+
+**Fields:**
+- `preset` (or the action value) — `offline`, `slow_3g`, `fast_3g`, `none`, or `reset`
+- `offline` — explicitly toggle offline mode
+- `latency` — additional latency in milliseconds
+- `download` / `upload` — throughput in Mbps; a negative value means unlimited
+- `media` — `screen`, `print`, or `none`
+- `color_scheme` — `light`, `dark`, or `none`
+- `latitude` / `longitude` — geolocation override; both are required
+- `accuracy` — geolocation accuracy in meters (default: 1)
+- `user_agent` — user agent string
+- `timezone` — IANA timezone identifier (for example, `America/Los_Angeles`)
+- `reset` — clear all emulation overrides first; explicit fields are still applied
+
+Presets provide defaults that can be overridden by individual fields. `offline` has no throughput; `slow_3g` is 400 ms latency and 0.4 Mbps down/up; `fast_3g` is 150 ms latency, 1.6 Mbps down, and 0.75 Mbps up.
+
+CLI examples:
+
+```bash
+bcl exec emulate slow_3g --color_scheme dark
+bcl exec emulate --latitude 37.7749 --longitude -122.4194
+bcl exec emulate reset
+```
+
+### route / unroute
+
+Intercept matching requests from the current page. `route` supports continuing, fulfilling with a custom response, or failing the request. Patterns use `*`, `**`, and `?` wildcards; the most recently registered matching route wins:
+
+```yaml
+# mock an API response
+- route:
+    pattern: "**/api/users/**"
+    action: fulfill
+    status: 200
+    headers:
+      Content-Type: application/json
+    body: '{"users":[]}'
+
+# block analytics requests
+- route:
+    pattern: "**/analytics/**"
+    action: fail
+    reason: Aborted
+
+# remove a route (non-matching requests are always continued)
+- unroute: "**/api/**"
+```
+
+**Fields for `route`:**
+- `pattern` (or the action value) — URL glob pattern
+- `action` — `continue` (default), `fulfill`/`mock`, or `fail`/`abort`/`deny`
+- `status` — HTTP status for `fulfill` (default: 200)
+- `headers` — response headers for `fulfill`
+- `body` — response body for `fulfill`
+- `reason` — CDP failure reason for `fail`
+
+Routes are registered on the current page target and are not persisted across `bcl exec` invocations or new tabs.
+
+CLI examples:
+
+```bash
+bcl exec route '**/api/**' --action fulfill --status 200 --body ok
+bcl exec unroute '**/api/**'
 ```
 
 ### cookies
@@ -443,6 +571,46 @@ In `bcl exec`, pass a JSON object as the action value:
 ```bash
 bcl exec headers '{"X-API-Key":"secret","Accept":"application/json"}'
 bcl exec headers clear
+```
+
+### storage
+
+Read and write `localStorage` or `sessionStorage`. `get` returns the value for a key, or all key/value pairs when no key is given, and stores it in `to`:
+
+```yaml
+# write and read a sessionStorage value
+- storage:
+    action: set
+    area: session
+    key: token
+    value: abc123
+
+- storage: get
+  area: session
+  key: token
+  to: TOKEN
+
+# remove a single key or clear the whole store
+- storage: delete
+  key: token
+- storage: clear
+  area: local
+```
+
+**Fields:**
+- `action` (or the action value) — `get`, `set`, `delete`, or `clear` (default: `get`)
+- `area` — `local` (default) or `session`; `localStorage`/`sessionStorage` are also accepted
+- `key` / `value` — required by `set`; `key` is required by `get` and `delete`
+- `to` — variable name for the value returned by `get`
+
+Aliases `list`, `add`, `remove`, and `clear_all` are also accepted.
+
+CLI examples:
+
+```bash
+bcl exec storage set --area local --key token --value abc123
+bcl exec storage get --key token --to TOKEN
+bcl exec storage clear
 ```
 
 ### for
@@ -568,3 +736,43 @@ Make HTTP requests. Supports all standard methods (GET, POST, PUT, DELETE, PATCH
 - `to` — variable name to store the response
 - `timeout` — request timeout in milliseconds
 - `on_error` — actions to run if the request fails
+
+### tab
+
+Switch the active browser tab or close it. Tabs are zero-indexed:
+
+```yaml
+# switch to the second tab
+- tab: 1
+
+# close the active tab
+- tab:
+    close: true
+```
+
+### server
+
+Start a local mock HTTP server that maps request paths to named flows. Requests expose `$request` variables (including `method`, `body`, and query parameters) to the handler flow, while `response.body` and `response.status` from the flow are returned to the client:
+
+```yaml
+- server:
+    /health: health_flow
+    /items:
+      GET: list_items
+      POST: create_item
+    base_path: /api
+    port: 9999
+    ws_url: http://127.0.0.1:9222
+
+health_flow:
+  - define: response.body
+    value: ok
+```
+
+**Fields:**
+- Route mappings — each path maps directly to a flow name or to a `GET`/`POST` mapping
+- `base_path` — path prefix stripped before route lookup (default: `/`)
+- `port` — local port to listen on (default: `8080`)
+- `ws_url` — browser URL used by browser actions inside handler flows (default: `http://127.0.0.1:9222`)
+
+See `assets/server.yml` for a complete example.

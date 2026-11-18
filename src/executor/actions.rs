@@ -3,9 +3,10 @@ use crate::flow::{Action, Condition, Context, FlowFile, Selector, SelectorPath, 
 use crate::executor::selector;
 use crate::executor::utils::{get_timeout, parse_builtin_variables, ensure_page_initialized};
 use crate::cdp::options::{
-    CookieOptions, InputFiles, ScreenshotOptions, SelectOptionOptions, SelectOptionValue,
-    SetInputFilesOptions, ViewportOptions,
+    CookieOptions, EmulateGeolocation, EmulateOptions, InputFiles, ScreenshotOptions,
+    SelectOptionOptions, SelectOptionValue, SetInputFilesOptions, ViewportOptions,
 };
+use crate::cdp::route::RouteHandler;
 use reqwest::Client;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -185,6 +186,38 @@ pub async fn run_actions(
             } => {
                 let current_page = page.borrow();
                 let result = do_type(&*current_page, context, value, target, *secret, *action_timeout, shadow_root, iframe, verbose).await;
+                drop(current_page);
+                if let Err(e) = result {
+                    handle_action_error(ws_url, e, on_error, on_timeout, context, verbose, flows).await?;
+                }
+            }
+            Action::Fill {
+                value,
+                target,
+                timeout: action_timeout,
+                on_error,
+                on_timeout,
+                shadow_root,
+                iframe,
+            } => {
+                let current_page = page.borrow();
+                let result = do_fill(&*current_page, context, value, target, *action_timeout, shadow_root, iframe, verbose).await;
+                drop(current_page);
+                if let Err(e) = result {
+                    handle_action_error(ws_url, e, on_error, on_timeout, context, verbose, flows).await?;
+                }
+            }
+            Action::Focus { target, timeout: action_timeout, on_error, on_timeout, shadow_root, iframe } => {
+                let current_page = page.borrow();
+                let result = do_focus(&*current_page, target, *action_timeout, shadow_root, iframe, verbose).await;
+                drop(current_page);
+                if let Err(e) = result {
+                    handle_action_error(ws_url, e, on_error, on_timeout, context, verbose, flows).await?;
+                }
+            }
+            Action::Blur { target, timeout: action_timeout, on_error, on_timeout, shadow_root, iframe } => {
+                let current_page = page.borrow();
+                let result = do_blur(&*current_page, target, *action_timeout, shadow_root, iframe, verbose).await;
                 drop(current_page);
                 if let Err(e) = result {
                     handle_action_error(ws_url, e, on_error, on_timeout, context, verbose, flows).await?;
@@ -390,15 +423,19 @@ pub async fn run_actions(
                     context.set(var_name, path);
                 }
             }
-            Action::Screenshot { path, to, format, quality, full_page } => {
+            Action::Screenshot { path, to, target, format, quality, full_page } => {
                 let current_page = page.borrow();
                 let resolved_path = path
                     .as_ref()
                     .map(|p| context.resolve_with_url(p, Some(&current_page.url())));
+                let resolved_target = target
+                    .as_ref()
+                    .map(|t| context.resolve_with_url(t, Some(&current_page.url())));
                 let opts = ScreenshotOptions {
                     format: format.clone(),
                     quality: *quality,
                     full_page: *full_page,
+                    target: resolved_target,
                 };
                 let (bytes, data) = current_page
                     .screenshot(opts)
@@ -466,6 +503,99 @@ pub async fn run_actions(
                         .await
                         .map_err(|e| Error::ActionFailed(format!("Failed to set viewport: {}", e)))?;
                 }
+            }
+            Action::Emulate {
+                preset,
+                offline,
+                latency,
+                download,
+                upload,
+                media,
+                color_scheme,
+                latitude,
+                longitude,
+                accuracy,
+                user_agent,
+                timezone,
+                reset,
+            } => {
+                let current_page = page.borrow();
+                let resolve_opt = |v: &Option<String>| {
+                    v.as_ref()
+                        .map(|s| context.resolve_with_url(s, Some(&current_page.url())))
+                };
+                let geolocation = match (latitude, longitude) {
+                    (Some(latitude), Some(longitude)) => Some(EmulateGeolocation {
+                        latitude: *latitude,
+                        longitude: *longitude,
+                        accuracy: accuracy.unwrap_or(1.0),
+                    }),
+                    _ => None,
+                };
+                let opts = EmulateOptions {
+                    preset: resolve_opt(preset),
+                    offline: *offline,
+                    latency: *latency,
+                    download: *download,
+                    upload: *upload,
+                    media: resolve_opt(media),
+                    color_scheme: resolve_opt(color_scheme),
+                    geolocation,
+                    user_agent: resolve_opt(user_agent),
+                    timezone: resolve_opt(timezone),
+                    reset: *reset,
+                };
+                current_page
+                    .emulate(opts)
+                    .await
+                    .map_err(|e| Error::ActionFailed(format!("Failed to emulate settings: {}", e)))?;
+            }
+            Action::Route { pattern, action, status, headers, body, reason } => {
+                let current_page = page.borrow();
+                let resolved_pattern = context.resolve_with_url(pattern, Some(&current_page.url()));
+                let handler = match action.as_deref().unwrap_or("continue") {
+                    "continue" => RouteHandler::Continue,
+                    "fulfill" => {
+                        let status = status.unwrap_or(200);
+                        if !(100..600).contains(&status) {
+                            return Err(Error::InvalidInput(format!("invalid route status: {}", status)));
+                        }
+                        let resolved_headers = headers
+                            .iter()
+                            .map(|(key, value)| {
+                                (
+                                    context.resolve_with_url(key, Some(&current_page.url())),
+                                    context.resolve_with_url(value, Some(&current_page.url())),
+                                )
+                            })
+                            .collect();
+                        let body = body
+                            .as_ref()
+                            .map(|b| context.resolve_with_url(b, Some(&current_page.url())))
+                            .unwrap_or_default();
+                        RouteHandler::Fulfill {
+                            status,
+                            headers: resolved_headers,
+                            body,
+                        }
+                    }
+                    "fail" => RouteHandler::Fail {
+                        reason: reason.as_deref().unwrap_or("Failed").to_string(),
+                    },
+                    other => return Err(Error::InvalidInput(format!("unknown route action: {}", other))),
+                };
+                current_page
+                    .route(&resolved_pattern, handler)
+                    .await
+                    .map_err(|e| Error::ActionFailed(format!("Failed to add route: {}", e)))?;
+            }
+            Action::Unroute { pattern } => {
+                let current_page = page.borrow();
+                let resolved_pattern = context.resolve_with_url(pattern, Some(&current_page.url()));
+                current_page
+                    .unroute(&resolved_pattern)
+                    .await
+                    .map_err(|e| Error::ActionFailed(format!("Failed to remove route: {}", e)))?;
             }
             Action::Cookies { action, name, value, url, domain, path, to } => {
                 let current_page = page.borrow();
@@ -540,6 +670,57 @@ pub async fn run_actions(
                         .set_extra_headers(&resolved)
                         .await
                         .map_err(|e| Error::ActionFailed(format!("Failed to set headers: {}", e)))?;
+                }
+            }
+            Action::Storage { action, area, key, value, to } => {
+                let current_page = page.borrow();
+                let resolved_area = area
+                    .as_ref()
+                    .map(|a| context.resolve_with_url(a, Some(&current_page.url())))
+                    .unwrap_or_else(|| "local".to_string());
+                let resolve_opt = |v: &Option<String>| {
+                    v.as_ref()
+                        .map(|s| context.resolve_with_url(s, Some(&current_page.url())))
+                };
+                let resolved_key = resolve_opt(key);
+                let resolved_value = resolve_opt(value);
+                let result = match action.as_str() {
+                    "get" => Some(
+                        current_page
+                            .storage_get(&resolved_area, resolved_key.as_deref())
+                            .await
+                            .map_err(|e| Error::ActionFailed(format!("Failed to get storage: {}", e)))?,
+                    ),
+                    "set" => {
+                        let key = resolved_key.ok_or_else(|| Error::InvalidInput("storage set requires 'key'".to_string()))?;
+                        let value = resolved_value.ok_or_else(|| Error::InvalidInput("storage set requires 'value'".to_string()))?;
+                        current_page
+                            .storage_set(&resolved_area, &key, &value)
+                            .await
+                            .map_err(|e| Error::ActionFailed(format!("Failed to set storage item: {}", e)))?;
+                        None
+                    }
+                    "delete" => {
+                        let key = resolved_key.ok_or_else(|| Error::InvalidInput("storage delete requires 'key'".to_string()))?;
+                        current_page
+                            .storage_delete(&resolved_area, &key)
+                            .await
+                            .map_err(|e| Error::ActionFailed(format!("Failed to delete storage item: {}", e)))?;
+                        None
+                    }
+                    "clear" => {
+                        current_page
+                            .storage_clear(&resolved_area)
+                            .await
+                            .map_err(|e| Error::ActionFailed(format!("Failed to clear storage: {}", e)))?;
+                        None
+                    }
+                    other => return Err(Error::InvalidAction(format!("unknown storage action: {}", other))),
+                };
+                drop(current_page);
+                if let (Some(var_name), Some(storage)) = (to, result) {
+                    let yaml = serde_yaml::to_value(&storage).unwrap_or(serde_yaml::Value::Null);
+                    context.set_yaml(var_name, yaml);
                 }
             }
             Action::Log { text } => {
@@ -825,6 +1006,114 @@ async fn do_type(
     Ok(())
 }
 
+async fn do_fill(
+    page: &Arc<crate::cdp::Page>,
+    context: &mut Context,
+    value: &str,
+    target: &Option<String>,
+    action_timeout: Option<u64>,
+    shadow_root: &Option<SelectorPath>,
+    iframe: &Option<SelectorPath>,
+    verbose: bool,
+) -> Result<(), Error> {
+    let resolved_value = context.resolve_value_with_url(value, Some(&page.url()))?;
+    let sel = selector::parse_selector(target.clone())?;
+    if let Some(selector) = &sel {
+        ensure_page_initialized(page).await?;
+        let selector_str = selector_to_string(selector);
+        if verbose {
+            eprintln!(
+                "[EXEC] fill: value={}, selector={}, shadow_root={:?}, iframe={:?}",
+                resolved_value, selector_str, shadow_root, iframe
+            );
+        }
+        let timeout = action_timeout.map(Duration::from_millis).unwrap_or_else(get_timeout);
+        let has_shadow_or_iframe = shadow_root.is_some() || iframe.is_some();
+
+        if !has_shadow_or_iframe {
+            wait_for_element(page, &selector_str, timeout).await?;
+            page.locator(&selector_str, None)
+                .first()
+                .fill(&resolved_value, None)
+                .await
+                .map_err(|e| Error::ActionFailed(format!("Failed to fill: {}", e)))?;
+        } else {
+            let final_selector = selector_str.trim_start_matches("xpath=");
+            let js_expr = build_shadow_dom_js_for_action(shadow_root, iframe, final_selector, "fill", &resolved_value);
+            page.evaluate(&js_expr, crate::cdp::protocol::SerializedArgument::default(), None)
+                .await
+                .map_err(|e| Error::ActionFailed(format!("Failed to fill via shadow DOM: {}", e)))?;
+        }
+    }
+    Ok(())
+}
+
+async fn do_focus(
+    page: &Arc<crate::cdp::Page>,
+    target: &Option<String>,
+    action_timeout: Option<u64>,
+    shadow_root: &Option<SelectorPath>,
+    iframe: &Option<SelectorPath>,
+    verbose: bool,
+) -> Result<(), Error> {
+    do_focus_or_blur(page, "focus", target, action_timeout, shadow_root, iframe, verbose).await
+}
+
+async fn do_blur(
+    page: &Arc<crate::cdp::Page>,
+    target: &Option<String>,
+    action_timeout: Option<u64>,
+    shadow_root: &Option<SelectorPath>,
+    iframe: &Option<SelectorPath>,
+    verbose: bool,
+) -> Result<(), Error> {
+    do_focus_or_blur(page, "blur", target, action_timeout, shadow_root, iframe, verbose).await
+}
+
+async fn do_focus_or_blur(
+    page: &Arc<crate::cdp::Page>,
+    action: &str,
+    target: &Option<String>,
+    action_timeout: Option<u64>,
+    shadow_root: &Option<SelectorPath>,
+    iframe: &Option<SelectorPath>,
+    verbose: bool,
+) -> Result<(), Error> {
+    let sel = selector::parse_selector(target.clone())?;
+    if let Some(selector) = &sel {
+        ensure_page_initialized(page).await?;
+        let selector_str = selector_to_string(selector);
+        if verbose {
+            eprintln!("[EXEC] {}: selector={}", action, selector_str);
+        }
+        let timeout = action_timeout.map(Duration::from_millis).unwrap_or_else(get_timeout);
+        let has_shadow_or_iframe = shadow_root.is_some() || iframe.is_some();
+
+        if !has_shadow_or_iframe {
+            wait_for_element(page, &selector_str, timeout).await?;
+            let locator = page.locator(&selector_str, None).first();
+            if action == "focus" {
+                locator
+                    .focus()
+                    .await
+                    .map_err(|e| Error::ActionFailed(format!("Failed to focus: {}", e)))?;
+            } else {
+                locator
+                    .blur()
+                    .await
+                    .map_err(|e| Error::ActionFailed(format!("Failed to blur: {}", e)))?;
+            }
+        } else {
+            let final_selector = selector_str.trim_start_matches("xpath=");
+            let js_expr = build_shadow_dom_js_for_action(shadow_root, iframe, final_selector, action, "");
+            page.evaluate(&js_expr, crate::cdp::protocol::SerializedArgument::default(), None)
+                .await
+                .map_err(|e| Error::ActionFailed(format!("Failed to {} via shadow DOM: {}", action, e)))?;
+        }
+    }
+    Ok(())
+}
+
 fn build_shadow_dom_js_for_action(
     shadow_root: &Option<SelectorPath>,
     iframe: &Option<SelectorPath>,
@@ -832,7 +1121,7 @@ fn build_shadow_dom_js_for_action(
     action: &str,
     value: &str,
 ) -> String {
-    let mut js = String::from("(function() { ");
+    let mut js = String::from("(function() { var node = document; ");
 
     if let Some(iframe_path) = iframe {
         let selectors: Vec<String> = match iframe_path {
@@ -868,8 +1157,14 @@ fn build_shadow_dom_js_for_action(
     js.push_str("if (!el) return null; ");
 
     match action {
-        "type" => {
-            js.push_str(&format!("el.value = '{}'; el.dispatchEvent(new Event('input', {{bubbles: true}})); ", value.replace('\'', "\\'")));
+        "type" | "fill" => {
+            js.push_str(&format!("el.value = '{}'; el.dispatchEvent(new Event('input', {{bubbles: true}})); el.dispatchEvent(new Event('change', {{bubbles: true}})); ", value.replace('\'', "\\'")));
+        }
+        "focus" => {
+            js.push_str("el.focus(); ");
+        }
+        "blur" => {
+            js.push_str("el.blur(); ");
         }
         "click" => {
             js.push_str("el.click(); ");

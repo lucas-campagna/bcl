@@ -39,13 +39,21 @@ bcl list <path_to_yaml>
 bcl exec goto https://example.com
 bcl exec read //body --html true
 bcl exec read '//*[@id="link"]' --to LINK_REF --attribute href
+bcl exec fill user@example.com --target '//*[@id="email"]'
+bcl exec focus '//*[@id="search"]'
+bcl exec blur '//*[@id="search"]'
 
 # browser navigation and capture
+bcl exec tab 1
 bcl exec back
 bcl exec forward
 bcl exec reload --ignore_cache true
 bcl exec viewport 1280 --height 720
+bcl exec emulate slow_3g --color_scheme dark
+bcl exec route '**/api/**' --action fulfill --status 200 --body ok
+bcl exec unroute '**/api/**'
 bcl exec screenshot ./page.png --full_page true
+bcl exec screenshot ./card.png --target '//*[@id="card"]'
 bcl exec screenshot --to SCREENSHOT_B64
 
 # request state
@@ -53,6 +61,8 @@ bcl exec cookies get --to COOKIES
 bcl exec cookies set --name session --value abc123 --url https://example.com
 bcl exec headers '{"X-API-Key":"secret"}'
 bcl exec headers clear
+bcl exec storage set --key token --value abc123
+bcl exec storage get --key token --to TOKEN
 ```
 
 Run `bcl help <action>` or `bcl help <action> --examples` for action-specific usage.

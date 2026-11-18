@@ -131,6 +131,7 @@ pub struct ScreenshotOptions {
     pub format: Option<String>,
     pub quality: Option<u8>,
     pub full_page: bool,
+    pub target: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -139,6 +140,30 @@ pub struct ViewportOptions {
     pub height: u64,
     pub device_scale_factor: Option<f64>,
     pub mobile: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct EmulateOptions {
+    pub preset: Option<String>,
+    pub offline: Option<bool>,
+    pub latency: Option<f64>,
+    /// Download speed in megabits per second.
+    pub download: Option<f64>,
+    /// Upload speed in megabits per second.
+    pub upload: Option<f64>,
+    pub media: Option<String>,
+    pub color_scheme: Option<String>,
+    pub geolocation: Option<EmulateGeolocation>,
+    pub user_agent: Option<String>,
+    pub timezone: Option<String>,
+    pub reset: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EmulateGeolocation {
+    pub latitude: f64,
+    pub longitude: f64,
+    pub accuracy: f64,
 }
 
 #[derive(Debug, Clone, Default)]

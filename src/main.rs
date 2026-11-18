@@ -415,7 +415,9 @@ exec bcl run -t "$FLOW_NAME" - "${{EXTRA_ARGS[@]}}" <<< "$YAML_CONTENT"
 }
 
 fn parse_exec_scalar(action: &str, field: Option<&str>, value: &str) -> anyhow::Result<serde_yaml::Value> {
-    let structured = matches!(action, "headers") || matches!(field, Some("values" | "headers"));
+    let structured = matches!(action, "headers")
+        || matches!(field, Some("values" | "headers"))
+        || matches!((action, field), ("route", Some("headers")));
     if structured {
         let trimmed = value.trim();
         if trimmed.starts_with('{') || trimmed.starts_with('[') {
@@ -436,6 +438,7 @@ fn parse_exec_scalar(action: &str, field: Option<&str>, value: &str) -> anyhow::
             | ("screenshot", Some("full_page"))
             | ("reload", Some("ignore_cache"))
             | ("viewport", Some("mobile" | "reset"))
+            | ("emulate", Some("offline" | "reset"))
             | ("headers", Some("clear"))
     );
     if bool_field {
@@ -447,7 +450,7 @@ fn parse_exec_scalar(action: &str, field: Option<&str>, value: &str) -> anyhow::
 
     let integer_field = matches!(
         field,
-        Some("timeout" | "duration" | "max" | "interval" | "port" | "width" | "height" | "quality")
+        Some("timeout" | "duration" | "max" | "interval" | "port" | "width" | "height" | "quality" | "status" | "status_code")
     );
     let float_field = matches!(field, Some("device_scale_factor"));
     let signed_integer_field = matches!(field, Some("x" | "y"));
@@ -681,14 +684,18 @@ fn print_command_summary() {
     println!("  type        Type text into an input");
     println!("  press       Press a keyboard key");
     println!("  wait        Wait for element, URL, or duration");
+    println!("  ask         Prompt for input and store the answer");
     println!("  read        Read element text, HTML, attribute, or value");
     println!("  hover       Hover over an element");
     println!("  select      Select option(s) from a dropdown");
     println!("  check       Check a checkbox");
     println!("  uncheck     Uncheck a checkbox");
     println!("  dblclick    Double-click an element");
-    println!("  right-click Right-click an element");
+    println!("  right_click Right-click an element");
     println!("  clear       Clear an input field");
+    println!("  fill        Fill an input value directly");
+    println!("  focus       Focus an element");
+    println!("  blur        Blur an element");
     println!("  upload      Upload file(s)");
     println!("  drag        Drag and drop");
     println!("  scroll      Scroll an element");
@@ -714,8 +721,13 @@ fn print_command_summary() {
     println!("  forward     Navigate forward in history");
     println!("  reload      Reload the current page");
     println!("  viewport    Set or reset the browser viewport");
+    println!("  emulate     Emulate network, media, geolocation, and other conditions");
+    println!("  route       Intercept and mock matching browser requests");
+    println!("  unroute     Remove a previously registered request route");
     println!("  cookies     Get, set, delete, or clear cookies");
     println!("  headers     Set or clear extra HTTP headers");
+    println!("  storage     Get, set, delete, or clear web storage");
+    println!("  server      Start a local mock HTTP/WebSocket server");
     println!();
     println!("CLI Commands:");
     println!("  run         Run a BCL flow from a YAML file");
@@ -783,6 +795,29 @@ fn print_command_help(command: &str) {
             println!("    secret       If true, value is treated as sensitive");
             println!("    timeout      Max wait time in milliseconds");
         }
+        "fill" => {
+            println!("fill - Set an input value directly");
+            println!();
+            println!("USAGE:");
+            println!("    fill: <TEXT>");
+            println!("    fill:");
+            println!("      value: <TEXT>");
+            println!("      target: <SELECTOR>     # optional");
+            println!("      timeout: <MS>          # optional");
+            println!("      shadow_root: <PATH>    # optional");
+            println!("      iframe: <PATH>         # optional");
+        }
+        "focus" | "blur" => {
+            println!("{} - {} an element", command, if command == "focus" { "Focus" } else { "Blur" });
+            println!();
+            println!("USAGE:");
+            println!("    {}: <SELECTOR>", command);
+            println!("    {}:", command);
+            println!("      target: <SELECTOR>");
+            println!("      timeout: <MS>          # optional");
+            println!("      shadow_root: <PATH>    # optional");
+            println!("      iframe: <PATH>         # optional");
+        }
         "press" => {
             println!("press - Press a keyboard key");
             println!();
@@ -812,6 +847,15 @@ fn print_command_help(command: &str) {
             println!("    target       Wait for element to be visible");
             println!("    url          Wait for URL to match pattern");
             println!("    timeout      Max wait time (default: 30000)");
+        }
+        "ask" => {
+            println!("ask - Prompt for input");
+            println!();
+            println!("USAGE:");
+            println!("    ask: <PROMPT>");
+            println!("    ask:");
+            println!("      prompt: <PROMPT>");
+            println!("      to: <VAR_NAME>         # optional (default: TOTP)");
         }
         "read" => {
             println!("read - Read element text, HTML, attribute, or value");
@@ -1002,8 +1046,8 @@ fn print_command_help(command: &str) {
             println!("      code: <CODE>");
             println!("      to: <VAR_NAME>         # optional, store result");
         }
-        "define" => {
-            println!("define - Define a variable");
+        "define" | "set" => {
+            println!("define (alias: set) - Define a variable");
             println!();
             println!("USAGE:");
             println!("    define: <VALUE>");
@@ -1129,6 +1173,7 @@ fn print_command_help(command: &str) {
             println!("    screenshot: <FILE_PATH>");
             println!("    screenshot:");
             println!("      path: <FILE_PATH>      # optional if 'to' is set");
+            println!("      target: <SELECTOR>     # optional, capture only this element");
             println!("      format: png|jpeg       # optional (default: png)");
             println!("      quality: <0-100>       # optional (jpeg only)");
             println!("      full_page: true|false  # optional (default: false)");
@@ -1161,6 +1206,51 @@ fn print_command_help(command: &str) {
             println!("    viewport:");
             println!("      reset: true              # restore the default viewport");
         }
+        "emulate" => {
+            println!("emulate - Emulate browser conditions");
+            println!();
+            println!("USAGE:");
+            println!("    emulate: offline|slow_3g|fast_3g|none|reset");
+            println!("    emulate:");
+            println!("      preset: offline|slow_3g|fast_3g|none  # optional");
+            println!("      offline: true|false    # optional");
+            println!("      latency: <MS>          # optional");
+            println!("      download: <MBPS>       # optional");
+            println!("      upload: <MBPS>         # optional");
+            println!("      media: screen|print|none  # optional");
+            println!("      color_scheme: light|dark|none # optional");
+            println!("      latitude: <DEGREES>    # optional, requires longitude");
+            println!("      longitude: <DEGREES>   # optional, requires latitude");
+            println!("      accuracy: <METERS>     # optional (default: 1)");
+            println!("      user_agent: <STRING>   # optional");
+            println!("      timezone: <ID>         # optional");
+            println!("      reset: true|false      # clear all emulation overrides");
+        }
+        "route" => {
+            println!("route - Intercept matching browser requests");
+            println!();
+            println!("USAGE:");
+            println!("    route: <URL_PATTERN>");
+            println!("    route:");
+            println!("      pattern: <URL_PATTERN>");
+            println!("      action: continue|fulfill|fail  # optional (default: continue)");
+            println!("      status: <HTTP_STATUS>  # for fulfill (default: 200)");
+            println!("      headers:               # optional, for fulfill");
+            println!("        Content-Type: application/json");
+            println!("      body: <TEXT>           # for fulfill");
+            println!("      reason: <REASON>       # optional, for fail (default: Failed)");
+            println!();
+            println!("Patterns support * (single path segment), ** (any characters), and ?.");
+            println!("The most recently registered matching route wins.");
+        }
+        "unroute" => {
+            println!("unroute - Remove request routes matching a URL pattern");
+            println!();
+            println!("USAGE:");
+            println!("    unroute: <URL_PATTERN>");
+            println!("    unroute:");
+            println!("      pattern: <URL_PATTERN>");
+        }
         "cookies" => {
             println!("cookies - Manage browser cookies");
             println!();
@@ -1185,6 +1275,33 @@ fn print_command_help(command: &str) {
             println!();
             println!("In bcl exec, pass a JSON object as the value:");
             println!("    bcl exec headers '{{\"X-Key\": \"value\"}}'");
+        }
+        "storage" => {
+            println!("storage - Manage localStorage and sessionStorage");
+            println!();
+            println!("USAGE:");
+            println!("    storage: get|set|delete|clear");
+            println!("    storage:");
+            println!("      action: get|set|delete|clear");
+            println!("      area: local|session    # optional (default: local)");
+            println!("      key: <KEY>             # for get/set/delete");
+            println!("      value: <VALUE>         # for set");
+            println!("      to: <VAR_NAME>         # optional, for get");
+            println!();
+            println!("Aliases: list→get, add→set, remove→delete, clear_all→clear.");
+        }
+        "server" => {
+            println!("server - Start a local mock HTTP/WebSocket server");
+            println!();
+            println!("USAGE:");
+            println!("    server:");
+            println!("      /path: <FLOW_NAME>     # route to a flow");
+            println!("      /path:                 # or method-specific routes");
+            println!("        GET: <FLOW_NAME>");
+            println!("        POST: <FLOW_NAME>");
+            println!("      base_path: <PATH>      # optional (default: /)");
+            println!("      port: <PORT>           # optional (default: 8080)");
+            println!("      ws_url: <URL>          # optional browser WebSocket URL");
         }
         "cli" => {
             println!("CLI Commands:");
@@ -1288,6 +1405,13 @@ fn print_cli_command_help(command: &str) {
             println!("    bcl exec click \"//button[@id='submit']\"");
             println!("    bcl exec read \"//body\" --html true --to BODY_HTML");
             println!("    bcl exec type \"//input[@name='q']\" \"search term\"");
+            println!("    bcl exec fill value --target \"//input[@name='q']\"");
+            println!("    bcl exec focus \"//input[@name='q']\"");
+            println!("    bcl exec blur \"//input[@name='q']\"");
+            println!("    bcl exec storage set --area local --key token --value abc123");
+            println!("    bcl exec emulate slow_3g --color_scheme dark");
+            println!("    bcl exec route '**/api/**' --action fulfill --status 200 --body ok");
+            println!("    bcl exec unroute '**/api/**'");
             println!("    bcl exec wait 2000");
         }
         "help" => {
@@ -1452,6 +1576,26 @@ fn print_command_examples(command: &str) {
             println!("      value: \"secret123\"");
             println!("      secret: true");
         }
+        "fill" => {
+            println!("fill - Examples");
+            println!();
+            println!("Fill an input directly:");
+            println!("    fill:");
+            println!("      target: \"//input[@name='email']\"");
+            println!("      value: user@example.com");
+            println!();
+            println!("CLI:");
+            println!("    bcl exec fill user@example.com --target \"//input[@name='email']\"");
+        }
+        "focus" | "blur" => {
+            println!("{} - Examples", command);
+            println!();
+            println!("{} an element:", command);
+            println!("    {}: \"//input[@name='search']\"", command);
+            println!();
+            println!("CLI:");
+            println!("    bcl exec {} \"//input[@name='search']\"", command);
+        }
         "press" => {
             println!("press - Examples");
             println!();
@@ -1478,6 +1622,18 @@ fn print_command_examples(command: &str) {
             println!("    wait:");
             println!("      url: \"*success*\"");
             println!("      timeout: 10000");
+        }
+        "ask" => {
+            println!("ask - Examples");
+            println!();
+            println!("Prompt for a one-time code:");
+            println!("    ask: Enter your authentication code");
+            println!("    # result in TOTP variable");
+            println!();
+            println!("Store the answer in a custom variable:");
+            println!("    ask:");
+            println!("      prompt: Enter your name");
+            println!("      to: USER_NAME");
         }
         "read" => {
             println!("read - Examples");
@@ -1643,8 +1799,8 @@ fn print_command_examples(command: &str) {
             println!("        (selector) => document.querySelector(selector).click()");
             println!("      # Note: use with 'call' to pass arguments");
         }
-        "define" => {
-            println!("define - Examples");
+        "define" | "set" => {
+            println!("define (alias: set) - Examples");
             println!();
             println!("Define variable:");
             println!("    define:");
@@ -1791,6 +1947,11 @@ fn print_command_examples(command: &str) {
             println!("      full_page: true");
             println!("      to: SHOT_B64");
             println!();
+            println!("Capture a single element:");
+            println!("    screenshot:");
+            println!("      target: \"//div[@id='card']\"");
+            println!("      path: /tmp/card.png");
+            println!();
             println!("CLI:");
             println!("    bcl exec screenshot /tmp/page.png");
             println!("    bcl exec screenshot --full_page true --to SHOT_B64");
@@ -1826,6 +1987,54 @@ fn print_command_examples(command: &str) {
             println!("CLI:");
             println!("    bcl exec viewport 1280 --height 720");
         }
+        "emulate" => {
+            println!("emulate - Examples");
+            println!();
+            println!("Throttle the network:");
+            println!("    emulate: slow_3g");
+            println!();
+            println!("Dark mode and geolocation:");
+            println!("    emulate:");
+            println!("      color_scheme: dark");
+            println!("      latitude: 37.7749");
+            println!("      longitude: -122.4194");
+            println!();
+            println!("Restore defaults:");
+            println!("    emulate: reset");
+            println!();
+            println!("CLI:");
+            println!("    bcl exec emulate slow_3g --color_scheme dark");
+            println!("    bcl exec emulate --latitude 37.7749 --longitude -122.4194");
+        }
+        "route" => {
+            println!("route - Examples");
+            println!();
+            println!("Mock an API response:");
+            println!("    route:");
+            println!("      pattern: \"**/api/users/**\"");
+            println!("      action: fulfill");
+            println!("      status: 200");
+            println!("      headers:");
+            println!("        Content-Type: application/json");
+            println!("      body: '{{\"users\":[]}}'");
+            println!();
+            println!("Block analytics:");
+            println!("    route:");
+            println!("      pattern: \"**/analytics/**\"");
+            println!("      action: fail");
+            println!();
+            println!("CLI:");
+            println!("    bcl exec route '**/api/**' --action fulfill --status 200 --body ok");
+        }
+        "unroute" => {
+            println!("unroute - Examples");
+            println!();
+            println!("Remove a route:");
+            println!("    unroute: \"**/api/**\"");
+            println!();
+            println!("CLI:");
+            println!("    bcl exec unroute '**/api/**'");
+        }
         "cookies" => {
             println!("cookies - Examples");
             println!();
@@ -1855,6 +2064,35 @@ fn print_command_examples(command: &str) {
             println!();
             println!("CLI:");
             println!("    bcl exec headers '{{\"X-API-Key\":\"secret\"}}'");
+        }
+        "storage" => {
+            println!("storage - Examples");
+            println!();
+            println!("Set and read a sessionStorage value:");
+            println!("    storage:");
+            println!("      action: set");
+            println!("      area: session");
+            println!("      key: token");
+            println!("      value: abc123");
+            println!("    storage: get");
+            println!("      key: token");
+            println!("      to: TOKEN");
+            println!();
+            println!("CLI:");
+            println!("    bcl exec storage set --key token --value abc123 --area local");
+            println!("    bcl exec storage get --key token --to TOKEN");
+        }
+        "server" => {
+            println!("server - Examples");
+            println!();
+            println!("Serve two flows from /api:");
+            println!("    server:");
+            println!("      /health: health_flow");
+            println!("      /items:");
+            println!("        GET: list_items");
+            println!("        POST: create_item");
+            println!("      base_path: /api");
+            println!("      port: 9999");
         }
         "cli" => {
             println!("CLI Commands - Examples");
@@ -2064,6 +2302,73 @@ mod tests {
                     }
                     _ => panic!("Expected Screenshot action"),
                 }
+            }
+            _ => panic!("Expected exec command"),
+        }
+    }
+
+    #[test]
+    fn exec_parses_emulate_route_and_unroute() {
+        let cli = Cli::try_parse_from([
+            "bcl",
+            "exec",
+            "emulate",
+            "slow_3g",
+            "--color_scheme",
+            "dark",
+        ])
+        .unwrap();
+        match cli {
+            Cli::Exec(args) => {
+                let flow_file = parse_exec_action(&args).unwrap();
+                match &flow_file.get("main").unwrap()[0] {
+                    bcl::flow::Action::Emulate { preset, color_scheme, .. } => {
+                        assert_eq!(preset.as_deref(), Some("slow_3g"));
+                        assert_eq!(color_scheme.as_deref(), Some("dark"));
+                    }
+                    _ => panic!("Expected Emulate action"),
+                }
+            }
+            _ => panic!("Expected exec command"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "bcl",
+            "exec",
+            "route",
+            "**/api/**",
+            "--action",
+            "fulfill",
+            "--status",
+            "200",
+            "--body",
+            "ok",
+        ])
+        .unwrap();
+        match cli {
+            Cli::Exec(args) => {
+                let flow_file = parse_exec_action(&args).unwrap();
+                match &flow_file.get("main").unwrap()[0] {
+                    bcl::flow::Action::Route { pattern, action, status, body, .. } => {
+                        assert_eq!(pattern, "**/api/**");
+                        assert_eq!(action.as_deref(), Some("fulfill"));
+                        assert_eq!(*status, Some(200));
+                        assert_eq!(body.as_deref(), Some("ok"));
+                    }
+                    _ => panic!("Expected Route action"),
+                }
+            }
+            _ => panic!("Expected exec command"),
+        }
+
+        let cli = Cli::try_parse_from(["bcl", "exec", "unroute", "**/api/**"]).unwrap();
+        match cli {
+            Cli::Exec(args) => {
+                let flow_file = parse_exec_action(&args).unwrap();
+                assert!(matches!(
+                    &flow_file.get("main").unwrap()[0],
+                    bcl::flow::Action::Unroute { pattern } if pattern == "**/api/**"
+                ));
             }
             _ => panic!("Expected exec command"),
         }
